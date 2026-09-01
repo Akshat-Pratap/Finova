@@ -12,12 +12,17 @@ class AIInvestigation(BaseModel):
 
     investigation_id: str = Field(default_factory=lambda: "INV-" + __import__("uuid").uuid4().hex[:8].upper())
     exception_id: str
+    organization_id: Optional[str] = "org_default"
     transaction_id: Optional[str] = None
     processing_run_id: str
 
     # AI provider info
     provider: str  # "gemini" or "DEMO MODE"
     model_version: Optional[str] = None
+    prompt_version: str = "finance-investigator-v1"
+    request_context_hash: Optional[str] = None
+    latency_ms: Optional[float] = None
+    status: str = "COMPLETED"
 
     # Input context (stored for auditability)
     input_context: Dict[str, Any] = Field(default_factory=dict)

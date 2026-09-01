@@ -39,6 +39,8 @@ class ReconciliationResult(BaseModel):
 
     result_id: str = Field(default_factory=lambda: __import__("uuid").uuid4().hex)
     processing_run_id: str
+    organization_id: Optional[str] = "org_default"
+    dataset_id: Optional[str] = None
     transaction_id: str
     invoice_id: Optional[str] = None
     bank_transaction_id: Optional[str] = None
@@ -49,6 +51,7 @@ class ReconciliationResult(BaseModel):
     status: ReconciliationStatus
     confidence: float
     reason: str
+    decision_source: str = "AUTOMATED_RULE"  # AUTOMATED_RULE | AI_ASSISTED | HUMAN_REVIEW
     signals: ConfidenceSignals = Field(default_factory=ConfidenceSignals)
 
     # Amounts

@@ -20,6 +20,10 @@ class ProcessingRun(BaseModel):
     """A single end-to-end reconciliation batch."""
 
     run_id: str = Field(default_factory=lambda: "RUN-" + __import__("uuid").uuid4().hex[:8].upper())
+    organization_id: Optional[str] = "org_default"
+    dataset_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    triggered_by: Optional[str] = None
     status: RunStatus = RunStatus.STARTED
 
     # Input

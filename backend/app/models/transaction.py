@@ -41,6 +41,12 @@ class Transaction(BaseModel):
     invoice_id: Optional[str] = None
     description: Optional[str] = None
     processing_run_id: Optional[str] = None
+    organization_id: Optional[str] = "org_default"
+    dataset_id: Optional[str] = None
+
+    # Multi-currency support
+    exchange_rate: Optional[Decimal] = None
+    base_currency_amount: Optional[Decimal] = None
 
     # Ground truth (for benchmarking)
     ground_truth_status: Optional[str] = None

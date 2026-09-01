@@ -28,6 +28,7 @@ class Settlement(BaseModel):
     settlement_date: datetime
     status: SettlementStatus = SettlementStatus.PROCESSED
     processing_run_id: Optional[str] = None
+    organization_id: Optional[str] = "org_default"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = {"arbitrary_types_allowed": True}

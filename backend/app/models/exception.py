@@ -33,7 +33,35 @@ class ExceptionStatus(str, Enum):
     OPEN = "OPEN"
     UNDER_REVIEW = "UNDER_REVIEW"
     RESOLVED = "RESOLVED"
+    REJECTED = "REJECTED"
     IGNORED = "IGNORED"
+
+
+class ExceptionNote(BaseModel):
+    """User comment/note on an exception."""
+    note_id: str = Field(default_factory=lambda: f"not_{__import__('uuid').uuid4().hex[:8]}")
+    exception_id: str
+    organization_id: str = "org_default"
+    author: str
+    author_id: Optional[str] = None
+    content: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class ExceptionAdjustment(BaseModel):
+    """Audited financial adjustment recorded for an exception."""
+    adjustment_id: str = Field(default_factory=lambda: f"adj_{__import__('uuid').uuid4().hex[:8]}")
+    exception_id: str
+    organization_id: str = "org_default"
+    amount: Decimal
+    currency: str = "INR"
+    reason: str
+    approved_by: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class FinovaException(BaseModel):
@@ -41,8 +69,10 @@ class FinovaException(BaseModel):
 
     exception_id: str = Field(default_factory=lambda: "EX-" + __import__("uuid").uuid4().hex[:8].upper())
     processing_run_id: str
+    organization_id: Optional[str] = "org_default"
     transaction_id: Optional[str] = None
     result_id: Optional[str] = None
+    assigned_to: Optional[str] = None
 
     type: ExceptionType
     severity: ExceptionSeverity = ExceptionSeverity.MEDIUM
@@ -69,3 +99,4 @@ class FinovaException(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = {"arbitrary_types_allowed": True}
+
