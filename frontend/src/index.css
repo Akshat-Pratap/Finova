@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-dark-900 text-gray-100 font-sans antialiased;
+    background: radial-gradient(ellipse at top, #151d38 0%, #0a0d1a 60%);
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-800;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-400 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-500;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-dark-800 border border-dark-600 rounded-xl shadow-card;
+  }
+
+  .card-glow {
+    @apply card shadow-glow;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-600 hover:bg-brand-500 text-white shadow-glow hover:shadow-glow-lg;
+  }
+
+  .btn-secondary {
+    @apply btn bg-dark-600 hover:bg-dark-500 text-gray-300 hover:text-white border border-dark-500;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 hover:bg-red-500 text-white;
+  }
+
+  .btn-success {
+    @apply btn bg-green-700 hover:bg-green-600 text-white;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-matched {
+    @apply badge bg-green-900/60 text-green-400 border border-green-700/50;
+  }
+
+  .badge-ai {
+    @apply badge bg-brand-900/60 text-brand-300 border border-brand-700/50;
+  }
+
+  .badge-manual {
+    @apply badge bg-amber-900/60 text-amber-400 border border-amber-700/50;
+  }
+
+  .badge-duplicate {
+    @apply badge bg-purple-900/60 text-purple-400 border border-purple-700/50;
+  }
+
+  .badge-mismatch {
+    @apply badge bg-red-900/60 text-red-400 border border-red-700/50;
+  }
+
+  .stat-card {
+    @apply card p-5 hover:border-brand-600/50 transition-colors duration-200;
+  }
+
+  .table-row {
+    @apply border-b border-dark-600 hover:bg-dark-700/50 transition-colors duration-150;
+  }
+
+  .input {
+    @apply bg-dark-700 border border-dark-500 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-all duration-200;
+  }
+
+  .section-heading {
+    @apply text-lg font-semibold text-white mb-1;
+  }
+
+  .section-subheading {
+    @apply text-sm text-gray-400;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-brand-300 via-brand-400 to-brand-500 bg-clip-text text-transparent;
+  }
+
+  .glass {
+    background: rgba(15, 22, 41, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-in-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+}
+
+/* Recharts customizations */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  @apply bg-dark-700 border border-dark-500 rounded-lg shadow-card;
+}
+
+.recharts-cartesian-axis-tick-value {
+  @apply fill-gray-400;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgba(45, 59, 107, 0.5);
+}
