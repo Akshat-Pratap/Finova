@@ -1,0 +1,43 @@
+# Python
+backend/.venv/
+backend/.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.log
+
+# Frontend
+frontend/.env
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+
+# Data
+data/synthetic/*.csv
+data/synthetic/*.json
+data/samples/*.csv
+data/samples/*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Secrets
+*.env
+.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
