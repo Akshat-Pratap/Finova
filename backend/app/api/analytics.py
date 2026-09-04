@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.core.database import get_db, is_connected
 from app.core.auth_middleware import AuthenticatedContext, get_auth_context
 from app.services.analytics_engine import get_summary_analytics
-from app.services.workflow_controller import _memory_runs, _memory_results
+from app.services.memory_store import memory_runs as _memory_runs, memory_results as _memory_results
 from app.utils.helpers import dict_to_mongo
 
 logger = logging.getLogger(__name__)

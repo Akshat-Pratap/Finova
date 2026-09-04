@@ -40,6 +40,10 @@ from app.utils.helpers import dict_to_mongo
 
 logger = logging.getLogger(__name__)
 
+# Backwards-compatible aliases
+_memory_runs = memory_runs
+_memory_results = memory_results
+
 
 class WorkflowController:
     """Orchestrates the complete Finova reconciliation workflow."""
