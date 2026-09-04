@@ -29,11 +29,12 @@ export function AuthProvider({ children }) {
           }
         } catch (err) {
           console.warn('Session restoration failed:', err.message)
-          // Default to demo sandbox session if token invalid
-          _initDemoSession()
+          // Clear stale credentials — do NOT fall back to a demo org that doesn't exist in DB
+          localStorage.removeItem('finova_token')
+          localStorage.removeItem('finova_org_id')
         }
       } else {
-        _initDemoSession()
+        // No token — stay as unauthenticated, don't inject a fake org
       }
       setLoading(false)
     }

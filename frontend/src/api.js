@@ -17,7 +17,7 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`
   }
   const orgId = localStorage.getItem('finova_org_id')
-  if (orgId) {
+  if (orgId && orgId !== 'undefined' && orgId !== 'null') {
     config.headers['X-Organization-ID'] = orgId
   }
   return config

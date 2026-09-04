@@ -7,6 +7,7 @@ Applies guardrails, caching, and audit logging.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
