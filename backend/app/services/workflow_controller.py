@@ -19,6 +19,7 @@ from app.models.audit_log import AuditEventType
 from app.models.dataset import DatasetStatus
 from app.models.processing_run import ProcessingRun, RunStatus
 from app.models.reconciliation import ReconciliationResult, ReconciliationStatus
+from app.services.background_runner import JobStatus
 from app.services.analytics_engine import compute_run_analytics
 from app.services.audit_logger import AuditLogger
 from app.services.exception_manager import ExceptionManager
@@ -64,10 +65,11 @@ class WorkflowController:
         Returns (processing_run, results, analytics).
         """
         run = ProcessingRun(
-            run_id=f"RUN-{uuid.uuid4().hex[:8].upper()}",
+            run_id=f"RUN-{uuid.uuid4().hex[:12].upper()}",
             organization_id=organization_id,
             dataset_source="synthetic",
             dataset_name=f"synthetic_{num_records}_{seed}",
+            records_total=num_records,
         )
 
         start_time = time.perf_counter()
@@ -88,6 +90,7 @@ class WorkflowController:
             sett_raw = ingestion.get("settlements", IngestionResult()).records
 
             run.records_received = len(txn_raw)
+            run.records_total = len(txn_raw)
 
             # Step 2: Clean
             txn_cleaned = clean_transactions(txn_raw)
@@ -176,12 +179,17 @@ class WorkflowController:
             # Step 10: Finalize run metrics
             elapsed = time.perf_counter() - start_time
             run.processing_time_seconds = round(elapsed, 3)
+            run.elapsed_seconds = run.processing_time_seconds
+            run.records_processed = len(results)
+            run.progress_percent = 100.0
+            run.processing_rate = round(len(results) / max(0.001, elapsed), 1)
             run.records_matched = sum(1 for r in results if r.status == ReconciliationStatus.MATCHED)
             run.records_ai_reviewed = sum(1 for r in results if r.ai_investigated)
             run.records_manual_review = sum(1 for r in results if r.status == ReconciliationStatus.MANUAL_REVIEW)
             run.records_mismatch = sum(1 for r in results if r.status == ReconciliationStatus.MISMATCH)
             run.records_duplicate = sum(1 for r in results if r.status == ReconciliationStatus.DUPLICATE)
             run.records_missing = sum(1 for r in results if r.status == ReconciliationStatus.MISSING)
+            run.records_unmatched = len(results) - run.records_matched
             run.match_rate = round(run.records_matched / len(results), 4) if results else 0.0
             run.average_confidence = round(
                 sum(r.confidence for r in results) / len(results), 4
@@ -242,8 +250,8 @@ class WorkflowController:
         triggered_by: Optional[str] = None,
         job: Optional[Any] = None,
     ) -> Tuple[ProcessingRun, List[ReconciliationResult], Dict[str, Any]]:
-        """Run reconciliation on uploaded or imported raw data."""
-        # Idempotency check
+        """Run reconciliation on uploaded or imported raw data with bounded batching and counterpart checks."""
+        # 1. Idempotency check
         if idempotency_key:
             existing = await self._check_idempotency(idempotency_key, organization_id)
             if existing:
@@ -252,20 +260,38 @@ class WorkflowController:
                 analytics = compute_run_analytics(results, existing)
                 return existing, results, analytics
 
+        # 2. Concurrency check for active run on same dataset
+        if dataset_id:
+            active_run = await self._check_active_run(dataset_id, organization_id)
+            if active_run:
+                logger.warning(
+                    "Duplicate run requested for dataset %s while run %s is active (%s)",
+                    dataset_id,
+                    active_run.run_id,
+                    active_run.status.value,
+                )
+                results = await self.get_results_for_run(active_run.run_id, organization_id)
+                analytics = compute_run_analytics(results, active_run)
+                return active_run, results, analytics
+
         run = ProcessingRun(
-            run_id=f"RUN-{uuid.uuid4().hex[:8].upper()}",
+            run_id=f"RUN-{uuid.uuid4().hex[:12].upper()}",
             organization_id=organization_id,
             dataset_id=dataset_id,
             dataset_source="uploaded" if not dataset_name.startswith("razorpay") else "razorpay",
             dataset_name=dataset_name,
             idempotency_key=idempotency_key,
             triggered_by=triggered_by,
+            records_total=len(txn_records),
+            status=RunStatus.STARTED,
         )
         start_time = time.perf_counter()
 
         if job:
             job.records_total = len(txn_records)
-            job.progress_percent = 10.0
+            job.progress_percent = 5.0
+
+        await self._persist_run(run)
 
         await self._audit.log(
             AuditEventType.PROCESSING_STARTED,
@@ -277,17 +303,97 @@ class WorkflowController:
         )
 
         try:
+            # 3. Check for Counterpart Availability
+            has_counterpart = bool(inv_records or bank_records or sett_records)
+
+            if not has_counterpart and self._db is not None:
+                try:
+                    inv_count = await self._db.invoices.count_documents({"organization_id": organization_id}, limit=1)
+                    bank_count = await self._db.bank_transactions.count_documents({"organization_id": organization_id}, limit=1)
+                    sett_count = await self._db.settlements.count_documents({"organization_id": organization_id}, limit=1)
+                    has_counterpart = bool(inv_count > 0 or bank_count > 0 or sett_count > 0)
+                except Exception as exc:
+                    logger.warning("Failed to check DB counterpart records: %s", exc)
+
+            if not has_counterpart:
+                # No counterpart dataset exists: Do NOT fabricate artificial exceptions or invoke AI
+                msg = (
+                    f"Reconciliation cannot be performed because no counterpart dataset is available. "
+                    f"This dataset contains {len(txn_records)} transactions. "
+                    f"Upload or map a bank, invoice, settlement, or other compatible counterpart source to perform reconciliation."
+                )
+                logger.info("Dataset %s has NO_COUNTERPART_SOURCE (%d transactions)", dataset_id or dataset_name, len(txn_records))
+                run.status = RunStatus.NO_COUNTERPART_SOURCE
+                run.error_message = msg
+                run.records_total = len(txn_records)
+                run.records_received = len(txn_records)
+                run.records_valid = len(txn_records)
+                run.records_processed = 0
+                run.records_matched = 0
+                run.records_unmatched = 0
+                run.records_missing = 0
+                run.exceptions_created = 0
+                run.match_rate = 0.0
+                run.average_confidence = 0.0
+                run.progress_percent = 100.0
+                run.processing_time_seconds = round(time.perf_counter() - start_time, 3)
+                run.elapsed_seconds = run.processing_time_seconds
+                run.completed_at = datetime.utcnow()
+
+                await self._persist_run(run)
+
+                await self._audit.log(
+                    AuditEventType.NO_COUNTERPART_SOURCE,
+                    organization_id=organization_id,
+                    processing_run_id=run.run_id,
+                    actor=triggered_by or "system",
+                    actor_id=triggered_by,
+                    message=msg,
+                    metadata={"records_total": len(txn_records), "dataset_id": dataset_id},
+                )
+
+                if job:
+                    job.status = JobStatus.NO_COUNTERPART_SOURCE
+                    job.progress_percent = 100.0
+                    job.records_total = len(txn_records)
+                    job.records_processed = 0
+                    job.matched_records = 0
+                    job.unmatched_records = 0
+                    job.exception_count = 0
+                    job.elapsed_seconds = run.processing_time_seconds
+                    job.error = msg
+                    job.result = {
+                        "run_id": run.run_id,
+                        "status": RunStatus.NO_COUNTERPART_SOURCE.value,
+                        "message": msg,
+                        "records_total": len(txn_records),
+                        "records_processed": 0,
+                        "records_matched": 0,
+                        "match_rate": 0.0,
+                        "exceptions_created": 0,
+                    }
+
+                analytics = {
+                    "total_records": len(txn_records),
+                    "matched_count": 0,
+                    "unmatched_count": 0,
+                    "exception_count": 0,
+                    "match_rate": 0.0,
+                    "status": RunStatus.NO_COUNTERPART_SOURCE.value,
+                    "message": msg,
+                }
+                return run, [], analytics
+
+            # 4. Clean and Normalize
             txn_cleaned = clean_transactions(txn_records)
             inv_cleaned = clean_invoices(inv_records)
             bank_cleaned = clean_bank_transactions(bank_records)
             sett_cleaned = clean_settlements(sett_records)
 
+            run.records_total = len(txn_records)
             run.records_received = len(txn_records)
             run.records_invalid = txn_cleaned.invalid_removed
             run.duplicates_input = txn_cleaned.duplicates_removed
-
-            if job:
-                job.progress_percent = 25.0
 
             transactions, _ = normalize_transactions(
                 txn_cleaned.records,
@@ -301,67 +407,104 @@ class WorkflowController:
 
             valid_txns, validation_report = validate_transactions(transactions)
             run.records_valid = validation_report.records_valid
-
-            if job:
-                job.progress_percent = 45.0
+            total_valid = len(valid_txns)
 
             unique_txns, duplicate_ids = detect_duplicates(valid_txns)
 
-            results = reconcile_batch(
-                transactions=unique_txns,
-                invoices=invoices,
-                bank_transactions=bank_txns,
-                settlements=settlements,
-                processing_run_id=run.run_id,
-                duplicate_ids=duplicate_ids,
-            )
+            # 5. Process in Bounded Batches
+            batch_size = max(100, getattr(settings, "reconciliation_batch_size", 1000))
+            all_results: List[ReconciliationResult] = []
+            processed_count = 0
 
-            for r in results:
-                r.organization_id = organization_id
-                r.dataset_id = dataset_id
+            invoices_dict = {i.invoice_id: i for i in invoices}
+            bank_txns_dict = {b.bank_transaction_id: b for b in bank_txns}
+            settlements_dict = {s.transaction_id: s for s in settlements}
 
-            for txn in valid_txns:
-                if txn.transaction_id in duplicate_ids:
-                    results.append(ReconciliationResult(
-                        processing_run_id=run.run_id,
-                        organization_id=organization_id,
-                        dataset_id=dataset_id,
-                        transaction_id=txn.transaction_id,
-                        customer_id=txn.customer_id,
-                        status=ReconciliationStatus.DUPLICATE,
-                        confidence=0.95,
-                        decision_source="AUTOMATED_RULE",
-                        reason="Duplicate transaction detected.",
-                    ))
+            run.status = RunStatus.PROCESSING
 
-            if job:
-                job.progress_percent = 65.0
+            for i in range(0, total_valid, batch_size):
+                chunk = unique_txns[i : i + batch_size]
+                chunk_results = reconcile_batch(
+                    transactions=chunk,
+                    invoices=invoices,
+                    bank_transactions=bank_txns,
+                    settlements=settlements,
+                    processing_run_id=run.run_id,
+                    duplicate_ids=duplicate_ids,
+                )
 
-            ai_results = await self._run_ai_investigations(
-                results=results,
-                transactions={t.transaction_id: t for t in valid_txns},
-                invoices={i.invoice_id: i for i in invoices},
-                bank_txns={b.bank_transaction_id: b for b in bank_txns},
-                settlements={s.transaction_id: s for s in settlements},
-                processing_run_id=run.run_id,
-                organization_id=organization_id,
-            )
-            results = ai_results
+                for r in chunk_results:
+                    r.organization_id = organization_id
+                    r.dataset_id = dataset_id
 
-            if job:
-                job.progress_percent = 85.0
+                for txn in chunk:
+                    if txn.transaction_id in duplicate_ids:
+                        chunk_results.append(
+                            ReconciliationResult(
+                                processing_run_id=run.run_id,
+                                organization_id=organization_id,
+                                dataset_id=dataset_id,
+                                transaction_id=txn.transaction_id,
+                                customer_id=txn.customer_id,
+                                status=ReconciliationStatus.DUPLICATE,
+                                confidence=0.95,
+                                decision_source="AUTOMATED_RULE",
+                                reason="Duplicate transaction detected.",
+                            )
+                        )
 
-            await self._create_exceptions(results, run.run_id, organization_id)
-            await self._persist_results(results)
+                # Bounded AI investigations on ambiguous chunk records
+                chunk_ai_results = await self._run_ai_investigations(
+                    results=chunk_results,
+                    transactions={t.transaction_id: t for t in chunk},
+                    invoices=invoices_dict,
+                    bank_txns=bank_txns_dict,
+                    settlements=settlements_dict,
+                    processing_run_id=run.run_id,
+                    organization_id=organization_id,
+                )
 
+                # Incrementally create exceptions and persist results
+                await self._create_exceptions(chunk_ai_results, run.run_id, organization_id)
+                await self._persist_results(chunk_ai_results)
+
+                all_results.extend(chunk_ai_results)
+                processed_count += len(chunk)
+
+                # Update live progress metrics
+                elapsed_now = time.perf_counter() - start_time
+                run.records_processed = processed_count
+                run.progress_percent = round((processed_count / max(1, total_valid)) * 100.0, 1)
+                run.elapsed_seconds = round(elapsed_now, 2)
+                run.processing_rate = round(processed_count / max(0.001, elapsed_now), 1)
+
+                if job:
+                    job.records_total = total_valid
+                    job.records_processed = processed_count
+                    job.progress_percent = run.progress_percent
+                    job.matched_records = sum(1 for r in all_results if r.status == ReconciliationStatus.MATCHED)
+                    job.unmatched_records = sum(1 for r in all_results if r.status in [ReconciliationStatus.MISMATCH, ReconciliationStatus.MISSING, ReconciliationStatus.MANUAL_REVIEW])
+                    job.exception_count = sum(1 for r in all_results if r.status != ReconciliationStatus.MATCHED)
+                    job.processing_rate = run.processing_rate
+                    job.elapsed_seconds = run.elapsed_seconds
+
+                if i % (batch_size * 2) == 0:
+                    await self._persist_run(run)
+
+            results = all_results
             elapsed = time.perf_counter() - start_time
             run.processing_time_seconds = round(elapsed, 3)
+            run.elapsed_seconds = run.processing_time_seconds
+            run.records_processed = len(results)
+            run.progress_percent = 100.0
+            run.processing_rate = round(len(results) / max(0.001, elapsed), 1)
             run.records_matched = sum(1 for r in results if r.status == ReconciliationStatus.MATCHED)
             run.records_ai_reviewed = sum(1 for r in results if r.ai_investigated)
             run.records_manual_review = sum(1 for r in results if r.status == ReconciliationStatus.MANUAL_REVIEW)
             run.records_duplicate = sum(1 for r in results if r.status == ReconciliationStatus.DUPLICATE)
             run.records_mismatch = sum(1 for r in results if r.status == ReconciliationStatus.MISMATCH)
             run.records_missing = sum(1 for r in results if r.status == ReconciliationStatus.MISSING)
+            run.records_unmatched = len(results) - run.records_matched
             run.match_rate = round(run.records_matched / len(results), 4) if results else 0.0
             run.average_confidence = round(
                 sum(r.confidence for r in results) / len(results), 4
@@ -382,15 +525,52 @@ class WorkflowController:
             )
 
             if job:
+                job.status = JobStatus.COMPLETED
                 job.progress_percent = 100.0
                 job.records_processed = len(results)
+                job.matched_records = run.records_matched
+                job.unmatched_records = run.records_unmatched
+                job.result = {
+                    "run_id": run.run_id,
+                    "status": RunStatus.COMPLETED.value,
+                    "records_processed": len(results),
+                    "records_matched": run.records_matched,
+                    "match_rate": run.match_rate,
+                    "analytics": analytics,
+                }
 
         except Exception as exc:
-            run.status = RunStatus.FAILED
-            run.error_message = str(exc)
+            err_str = str(exc)
+            is_storage_limit = "over your space quota" in err_str or "AtlasError" in err_str or "8000" in err_str
+            if is_storage_limit:
+                run.status = RunStatus.STORAGE_LIMIT_REACHED
+                run.error_message = f"Database storage quota reached: {exc}"
+                logger.error("Reconciliation run halted: STORAGE_LIMIT_REACHED (%s)", exc)
+                try:
+                    await self._audit.log(
+                        AuditEventType.PROCESSING_STORAGE_LIMIT,
+                        organization_id=organization_id,
+                        processing_run_id=run.run_id,
+                        message=f"Storage limit exceeded: {exc}",
+                    )
+                except Exception:
+                    pass
+            else:
+                run.status = RunStatus.FAILED
+                run.error_message = err_str
+                logger.error("Reconciliation run failed: %s", exc, exc_info=True)
+
             run.completed_at = datetime.utcnow()
-            await self._persist_run(run)
-            logger.error("Reconciliation run failed: %s", exc, exc_info=True)
+            run.processing_time_seconds = round(time.perf_counter() - start_time, 3)
+            try:
+                await self._persist_run(run)
+            except Exception:
+                pass
+
+            if job:
+                job.status = JobStatus.STORAGE_LIMIT_REACHED if is_storage_limit else JobStatus.FAILED
+                job.error = run.error_message
+                job.completed_at = datetime.utcnow()
             raise
 
         return run, results, analytics
@@ -421,10 +601,13 @@ class WorkflowController:
         # Update dataset status
         dataset.processing_status = DatasetStatus.PROCESSING
         if self._db is not None:
-            await self._db.datasets.update_one(
-                {"dataset_id": dataset_id},
-                {"$set": {"processing_status": DatasetStatus.PROCESSING.value}},
-            )
+            try:
+                await self._db.datasets.update_one(
+                    {"dataset_id": dataset_id},
+                    {"$set": {"processing_status": DatasetStatus.PROCESSING.value}},
+                )
+            except Exception as exc:
+                logger.warning("Failed to update dataset status to PROCESSING in DB: %s", exc)
 
         run, results, analytics = await self.run_from_data(
             txn_records=mapped_records,
@@ -441,13 +624,21 @@ class WorkflowController:
 
         # Update dataset completion
         if self._db is not None:
-            await self._db.datasets.update_one(
-                {"dataset_id": dataset_id},
-                {"$set": {
-                    "processing_status": DatasetStatus.COMPLETED.value,
-                    "processing_run_id": run.run_id,
-                }},
-            )
+            try:
+                new_status = (
+                    DatasetStatus.COMPLETED.value
+                    if run.status == RunStatus.COMPLETED
+                    else DatasetStatus.VALIDATED.value
+                )
+                await self._db.datasets.update_one(
+                    {"dataset_id": dataset_id},
+                    {"$set": {
+                        "processing_status": new_status,
+                        "processing_run_id": run.run_id,
+                    }},
+                )
+            except Exception as exc:
+                logger.warning("Failed to update dataset status in DB: %s", exc)
 
         return run, results, analytics
 
@@ -468,6 +659,33 @@ class WorkflowController:
             return None
         for r in memory_runs.values():
             if r.get("idempotency_key") == idempotency_key and r.get("organization_id") == organization_id:
+                d = r.copy()
+                d.pop("_id", None)
+                return ProcessingRun(**d)
+        return None
+
+    async def _check_active_run(self, dataset_id: str, organization_id: str) -> Optional[ProcessingRun]:
+        """Check if a reconciliation run is currently active for this dataset to prevent duplicate concurrent runs."""
+        active_statuses = [RunStatus.QUEUED.value, RunStatus.STARTED.value, RunStatus.PROCESSING.value]
+        if self._db is not None:
+            try:
+                doc = await self._db.processing_runs.find_one({
+                    "dataset_id": dataset_id,
+                    "organization_id": organization_id,
+                    "status": {"$in": active_statuses},
+                })
+                if doc:
+                    doc.pop("_id", None)
+                    return ProcessingRun(**doc)
+            except Exception as exc:
+                logger.warning("Active run DB query failed: %s", exc)
+
+        for r in memory_runs.values():
+            if (
+                r.get("dataset_id") == dataset_id
+                and r.get("organization_id") == organization_id
+                and r.get("status") in active_statuses
+            ):
                 d = r.copy()
                 d.pop("_id", None)
                 return ProcessingRun(**d)
@@ -501,7 +719,7 @@ class WorkflowController:
                 if not txn:
                     return
 
-                exception_id = f"EX-{uuid.uuid4().hex[:8].upper()}"
+                exception_id = f"EX-{uuid.uuid4().hex.upper()}"
 
                 investigation = await investigate_transaction(
                     txn=txn,

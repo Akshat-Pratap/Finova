@@ -218,27 +218,45 @@ def reconcile_batch(
     processing_run_id: str,
     duplicate_ids: Optional[Set[str]] = None,
 ) -> List[ReconciliationResult]:
-    """Reconcile a complete batch of transactions."""
+    """Reconcile a complete batch of transactions with high-throughput candidate indexing."""
     if duplicate_ids is None:
         duplicate_ids = set()
 
     results: List[ReconciliationResult] = []
-    logger.info(
-        "Reconciling batch: %d transactions, %d invoices, %d bank records, %d settlements",
-        len(transactions), len(invoices), len(bank_transactions), len(settlements),
-    )
+
+    # Build fast indexed lookups for large counterpart datasets
+    inv_by_id: Dict[str, Invoice] = {i.invoice_id: i for i in invoices if i.invoice_id}
+    bank_by_ref: Dict[str, BankTransaction] = {b.reference: b for b in bank_transactions if b.reference}
+    sett_by_tx: Dict[str, Settlement] = {s.transaction_id: s for s in settlements if s.transaction_id}
 
     for txn in transactions:
         is_dup = txn.transaction_id in duplicate_ids
+
+        # Select candidate counterpart records efficiently
+        cand_invoices = invoices
+        if txn.invoice_id and txn.invoice_id in inv_by_id:
+            cand_invoices = [inv_by_id[txn.invoice_id]]
+        elif len(invoices) > 200:
+            cand_invoices = invoices[:200]
+
+        cand_banks = bank_transactions
+        if txn.reference_id and txn.reference_id in bank_by_ref:
+            cand_banks = [bank_by_ref[txn.reference_id]]
+        elif len(bank_transactions) > 200:
+            cand_banks = bank_transactions[:200]
+
+        cand_settlements = settlements
+        if txn.transaction_id in sett_by_tx:
+            cand_settlements = [sett_by_tx[txn.transaction_id]]
+
         result = reconcile_transaction(
             txn=txn,
-            invoices=invoices,
-            bank_transactions=bank_transactions,
-            settlements=settlements,
+            invoices=cand_invoices,
+            bank_transactions=cand_banks,
+            settlements=cand_settlements,
             processing_run_id=processing_run_id,
             is_known_duplicate=is_dup,
         )
         results.append(result)
 
-    logger.info("Reconciliation complete. %d results.", len(results))
     return results

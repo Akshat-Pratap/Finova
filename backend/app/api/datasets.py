@@ -133,6 +133,34 @@ async def get_dataset(
     return {"success": True, "dataset": dict_to_mongo(dataset)}
 
 
+@router.delete(
+    "/{dataset_id}",
+    summary="Permanently delete a dataset and its records",
+)
+async def delete_dataset(
+    dataset_id: str,
+    ctx: Optional[AuthenticatedContext] = Depends(get_auth_context),
+):
+    """Permanently delete a dataset and all associated records from MongoDB Atlas and memory."""
+    try:
+        db = get_db() if is_connected() else None
+    except Exception:
+        db = None
+
+    org_id = ctx.org_id if ctx else "org_default"
+    user_id = ctx.user_id if ctx else "anonymous"
+
+    service = DatasetService(db)
+    deleted = await service.delete_dataset(dataset_id, organization_id=org_id, user_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+
+    return {
+        "success": True,
+        "message": f"Dataset '{dataset_id}' and all its stored records were permanently deleted.",
+    }
+
+
 @router.post(
     "/{dataset_id}/validate",
     summary="Validate dataset and preview data hygiene",

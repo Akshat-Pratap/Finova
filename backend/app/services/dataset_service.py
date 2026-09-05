@@ -272,3 +272,40 @@ class DatasetService:
                 memory_dataset_records[dataset_id] = records
             return records
         return []
+
+    async def delete_dataset(
+        self,
+        dataset_id: str,
+        organization_id: str,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Permanently delete a dataset and all its stored records from MongoDB Atlas & memory."""
+        dataset = await self.get_dataset(dataset_id, organization_id)
+        if not dataset:
+            return False
+
+        # Clear from memory
+        memory_datasets.pop(dataset_id, None)
+        memory_dataset_records.pop(dataset_id, None)
+
+        # Delete from MongoDB Atlas
+        if self._db is not None:
+            try:
+                await self._db.datasets.delete_one({"dataset_id": dataset_id, "organization_id": organization_id})
+                await self._db.dataset_records.delete_many({"dataset_id": dataset_id, "organization_id": organization_id})
+            except Exception as exc:
+                logger.error("Failed to delete dataset %s from MongoDB: %s", dataset_id, exc)
+                raise
+
+        await self._audit.log(
+            event_type=AuditEventType.DATASET_DELETED,
+            organization_id=organization_id,
+            entity_type="dataset",
+            entity_id=dataset_id,
+            actor=user_id or "user",
+            actor_id=user_id,
+            message=f"Deleted dataset '{dataset.filename}' ({dataset.record_count} records purged).",
+            metadata={"dataset_id": dataset_id, "filename": dataset.filename},
+        )
+
+        return True

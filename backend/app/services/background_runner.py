@@ -20,6 +20,8 @@ class JobStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    NO_COUNTERPART_SOURCE = "NO_COUNTERPART_SOURCE"
+    STORAGE_LIMIT_REACHED = "STORAGE_LIMIT_REACHED"
 
 
 class BackgroundJob:
@@ -40,6 +42,12 @@ class BackgroundJob:
         self.progress_percent = 0.0
         self.records_total = 0
         self.records_processed = 0
+        self.matched_records = 0
+        self.unmatched_records = 0
+        self.exception_count = 0
+        self.ai_investigated = 0
+        self.processing_rate = 0.0
+        self.elapsed_seconds = 0.0
         self.error: Optional[str] = None
         self.created_at = datetime.utcnow()
         self.started_at: Optional[datetime] = None
@@ -56,6 +64,12 @@ class BackgroundJob:
             "progress_percent": round(self.progress_percent, 1),
             "records_total": self.records_total,
             "records_processed": self.records_processed,
+            "matched_records": self.matched_records,
+            "unmatched_records": self.unmatched_records,
+            "exception_count": self.exception_count,
+            "ai_investigated": self.ai_investigated,
+            "processing_rate": round(self.processing_rate, 1),
+            "elapsed_seconds": round(self.elapsed_seconds, 1),
             "error": self.error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
@@ -88,6 +102,13 @@ class BackgroundJobRunner:
         return _jobs.get(job_id)
 
     @staticmethod
+    def get_job_by_run_id(run_id: str) -> Optional[BackgroundJob]:
+        for job in reversed(list(_jobs.values())):
+            if job.run_id == run_id:
+                return job
+        return None
+
+    @staticmethod
     def spawn_task(job_id: str, coroutine_func: Callable[[], Coroutine[Any, Any, Any]]) -> asyncio.Task:
         """Spawn a detached task with automatic error capture and status updating."""
         job = _jobs.get(job_id)
@@ -99,7 +120,13 @@ class BackgroundJobRunner:
             try:
                 result = await coroutine_func()
                 if job:
-                    job.status = JobStatus.COMPLETED
+                    if isinstance(result, dict) and result.get("status"):
+                        try:
+                            job.status = JobStatus(result["status"])
+                        except Exception:
+                            job.status = JobStatus.COMPLETED
+                    else:
+                        job.status = JobStatus.COMPLETED
                     job.progress_percent = 100.0
                     job.completed_at = datetime.utcnow()
                     if isinstance(result, dict):

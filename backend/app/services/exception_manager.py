@@ -46,7 +46,7 @@ class ExceptionManager:
         exc_type, severity, description = _classify_exception(result)
 
         exception = FinovaException(
-            exception_id=f"EX-{uuid.uuid4().hex[:8].upper()}",
+            exception_id=f"EX-{uuid.uuid4().hex.upper()}",
             processing_run_id=processing_run_id,
             organization_id=organization_id,
             transaction_id=result.transaction_id,
@@ -76,7 +76,7 @@ class ExceptionManager:
                 continue
             exc_type, severity, description = _classify_exception(result)
             exception = FinovaException(
-                exception_id=f"EX-{uuid.uuid4().hex[:8].upper()}",
+                exception_id=f"EX-{uuid.uuid4().hex.upper()}",
                 processing_run_id=processing_run_id,
                 organization_id=organization_id,
                 transaction_id=result.transaction_id,

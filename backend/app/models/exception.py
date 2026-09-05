@@ -67,7 +67,7 @@ class ExceptionAdjustment(BaseModel):
 class FinovaException(BaseModel):
     """Financial exception requiring human attention."""
 
-    exception_id: str = Field(default_factory=lambda: "EX-" + __import__("uuid").uuid4().hex[:8].upper())
+    exception_id: str = Field(default_factory=lambda: "EX-" + __import__("uuid").uuid4().hex.upper())
     processing_run_id: str
     organization_id: Optional[str] = "org_default"
     transaction_id: Optional[str] = None

@@ -88,6 +88,8 @@ def match_transaction_to_invoice(
         if score > best_score:
             best_score = score
             best_invoice = inv
+            if score >= 7.0:
+                break
 
     if best_invoice:
         # Populate evidence for best match
@@ -140,6 +142,8 @@ def match_transaction_to_bank(
         if score > best_score and score > 0:
             best_score = score
             best_bank = bank
+            if score >= 10.0:
+                break
 
     if best_bank:
         evidence.matched_bank_id = best_bank.bank_transaction_id

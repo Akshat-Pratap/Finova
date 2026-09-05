@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     # Reconciliation thresholds
     auto_reconcile_threshold: float = Field(default=0.90)
     ai_review_threshold: float = Field(default=0.70)
+    reconciliation_batch_size: int = Field(default=1000)
 
     # Upload limits
     max_upload_size: int = Field(default=1073741824)  # 1GB (1024MB)
