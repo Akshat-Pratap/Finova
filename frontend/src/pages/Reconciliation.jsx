@@ -29,6 +29,7 @@ export default function Reconciliation() {
   const [liveProgress, setLiveProgress] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [datasetInfo, setDatasetInfo] = useState(null)
   const { isDark } = useTheme()
 
   const pollTimerRef = useRef(null)
@@ -42,12 +43,37 @@ export default function Reconciliation() {
     if (savedRunId) { setCurrentRunId(savedRunId); setRunning(true); startPolling(savedRunId) }
   }, [])
 
+  // Fetch dataset info when in dataset mode to show real status (not hardcoded UPLOADED)
+  useEffect(() => {
+    let cancelled = false
+    async function fetchInfo() {
+      if (!isDatasetMode || !datasetId) { setDatasetInfo(null); return }
+      try {
+        const { getDataset } = await import('../api')
+        const res = await getDataset(datasetId)
+        if (!cancelled && res?.dataset) setDatasetInfo(res.dataset)
+        else if (!cancelled && res?.success) setDatasetInfo(res.dataset)
+      } catch { if (!cancelled) setDatasetInfo(null) }
+    }
+    fetchInfo()
+    return () => { cancelled = true }
+  }, [datasetId, isDatasetMode])
+
   const startPolling = (runId) => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+    let consecutiveErrors = 0
+    let pollCount = 0
     const poll = async () => {
+      pollCount += 1
       try {
         const res = await getRunStatus(runId)
-        if (!res) return
+        consecutiveErrors = 0
+        if (!res) {
+          if (pollCount > 8) {
+            clearInterval(pollTimerRef.current); pollTimerRef.current = null; setRunning(false); localStorage.removeItem('finova_active_run_id'); setError('Reconciliation job not found. It may have expired. Please start again.')
+          }
+          return
+        }
         const status = res.status || res.run?.status
         const total = res.total_records || res.run?.records_total || 0
         const processed = res.processed_records || res.run?.records_processed || 0
@@ -62,6 +88,12 @@ export default function Reconciliation() {
           elapsed_seconds: res.elapsed_seconds ?? res.run?.elapsed_seconds ?? res.run?.processing_time_seconds ?? 0,
           error: res.error,
         })
+        // Auto-clear stale jobs that have been PROCESSING for > 5 minutes without progress
+        const elapsed = res.elapsed_seconds ?? res.run?.elapsed_seconds ?? 0
+        if (status === 'PROCESSING' && elapsed > 300 && pollCount > 10 && progressPct < 5) {
+          clearInterval(pollTimerRef.current); pollTimerRef.current = null; setRunning(false); localStorage.removeItem('finova_active_run_id'); setError('Previous job appears stuck. Cleared. Please ensure datasets are VALIDATED and have a compatible counterpart, then try again.')
+          return
+        }
         if (['COMPLETED', 'FAILED', 'CANCELLED', 'NO_COUNTERPART_SOURCE', 'STORAGE_LIMIT_REACHED'].includes(status)) {
           clearInterval(pollTimerRef.current); pollTimerRef.current = null; setRunning(false); localStorage.removeItem('finova_active_run_id')
           try {
@@ -70,8 +102,17 @@ export default function Reconciliation() {
             setResult({ ...res, ...runDoc, status, records_processed: processed, records_matched: res.matched_records ?? runDoc.records_matched ?? 0, records_ai_reviewed: res.ai_investigated ?? runDoc.records_ai_reviewed ?? 0, records_manual_review: runDoc.records_manual_review ?? 0, records_duplicate: runDoc.records_duplicate ?? 0, records_mismatch: runDoc.records_mismatch ?? 0, exceptions_created: res.exception_count ?? 0, match_rate: runDoc.match_rate ?? (total > 0 ? (res.matched_records || 0) / total : 0), processing_time_seconds: res.elapsed_seconds ?? runDoc.processing_time_seconds ?? 0, analytics: runDoc.analytics || res.analytics || {} })
           } catch { setResult(res) }
           if (status === 'FAILED') setError(res.error || 'Reconciliation execution failed.')
+          if (status === 'NO_COUNTERPART_SOURCE') setError(res.error || res.message || 'No counterpart found. Please ensure you have at least 2 VALIDATED datasets of compatible types (e.g., Bank + Invoice) in the same organization.')
         }
-      } catch (err) { console.warn('Polling error:', err) }
+      } catch (err) {
+        consecutiveErrors += 1
+        console.warn('Polling error:', err)
+        const msg = err.message || ''
+        if (msg.includes('404') || msg.includes('not found') || consecutiveErrors > 5) {
+          clearInterval(pollTimerRef.current); pollTimerRef.current = null; setRunning(false); localStorage.removeItem('finova_active_run_id')
+          if (consecutiveErrors > 5) setError('Reconciliation job not found or expired. Please start a new run. If datasets show UPLOADED, please Validate them first via Datasets & Mapping → Validate Mapping.')
+        }
+      }
     }
     poll(); pollTimerRef.current = setInterval(poll, 1500)
   }
@@ -130,7 +171,7 @@ export default function Reconciliation() {
                   {isDatasetMode ? (
                     <>
                       <span className="flex items-center gap-1.5 truncate"><Database className="w-3.5 h-3.5 text-cyan-500 shrink-0" /><span className="font-mono text-xs text-cyan-600 dark:text-cyan-300 truncate" title={datasetId}>{datasetId}</span></span>
-                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded px-2 py-0.5 shrink-0 ml-2">UPLOADED</span>
+                      <span className={`text-[10px] font-bold rounded px-2 py-0.5 shrink-0 ml-2 border ${datasetInfo?.processing_status === 'VALIDATED' ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : datasetInfo?.processing_status === 'FAILED' ? 'text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/30' : 'text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/30'}`}>{datasetInfo?.processing_status || datasetInfo?.status || 'UPLOADED'}</span>
                     </>
                   ) : (
                     <>
@@ -159,7 +200,21 @@ export default function Reconciliation() {
                 {running ? (isDatasetMode ? 'Processing dataset…' : `Processing ${numRecords} records…`) : 'Start Reconciliation Engine'}
               </Button>
               {running && <p className="text-xs text-slate-500 dark:text-slate-400 animate-pulse">Executing deterministic passes and queuing AI ambiguity scoring…</p>}
+              {running && (
+                <button
+                  type="button"
+                  onClick={() => { localStorage.removeItem('finova_active_run_id'); if (pollTimerRef.current) clearInterval(pollTimerRef.current); setRunning(false); setLiveProgress(null); setError(null); }}
+                  className="text-xs text-amber-600 dark:text-amber-400 hover:underline font-medium px-2 py-1"
+                >
+                  Clear stuck job
+                </button>
+              )}
             </div>
+            {isDatasetMode && datasetInfo?.processing_status === 'UPLOADED' && !running && (
+              <div className="mt-3 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-300">
+                Dataset is still <strong>UPLOADED</strong> — it will be auto-validated when you start reconciliation, or validate manually via <Link to="/datasets" className="underline font-semibold">Datasets & Mapping → Validate Mapping</Link>.
+              </div>
+            )}
           </GlassCard>
         </div>
         <HealthMonitor accent="teal" latency={liveProgress ? `${(liveProgress.elapsed_seconds || 0).toFixed(1)}s elapsed` : '~0.04s/batch'} uptime="99.98%" lastRun={result ? `${result.processing_time_seconds?.toFixed(2)}s ago` : '—'} status={running ? 'healthy' : result?.status === 'COMPLETED' ? 'healthy' : 'healthy'} metrics={liveProgress ? [{ label: 'Throughput', value: liveProgress.processing_rate > 0 ? `${Math.round(liveProgress.processing_rate)} rec/s` : '…' }, { label: 'Progress', value: `${(liveProgress.progress_percent||0).toFixed(1)}%` }] : []} />
