@@ -404,14 +404,14 @@ class WorkflowController:
         job: Optional[Any] = None,
     ) -> Tuple[ProcessingRun, List[ReconciliationResult], Dict[str, Any]]:
         """Fetch records from a validated dataset and execute the reconciliation pipeline."""
-        from app.services.dataset_service import DatasetService, _memory_dataset_records
+        from app.services.dataset_service import DatasetService
 
         dataset_svc = DatasetService(self._db)
         dataset = await dataset_svc.get_dataset(dataset_id, organization_id)
         if not dataset:
             raise ValueError(f"Dataset '{dataset_id}' not found.")
 
-        raw_records = dataset_svc.get_dataset_records(dataset_id)
+        raw_records = await dataset_svc.get_dataset_records(dataset_id)
         if not raw_records and dataset.raw_sample:
             raw_records = dataset.raw_sample
 

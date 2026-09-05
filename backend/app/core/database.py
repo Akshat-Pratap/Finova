@@ -11,6 +11,8 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+import certifi
+
 _client: Optional[AsyncIOMotorClient] = None
 _db: Optional[AsyncIOMotorDatabase] = None
 
@@ -22,6 +24,7 @@ async def connect_db() -> None:
         _client = AsyncIOMotorClient(
             settings.mongodb_uri,
             serverSelectionTimeoutMS=5000,
+            tlsCAFile=certifi.where(),
         )
         # Verify connection
         await _client.admin.command("ping")

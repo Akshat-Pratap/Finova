@@ -70,9 +70,22 @@ class DatasetService:
 
         if self._db is not None:
             await self._db.datasets.insert_one(dict_to_mongo(dataset))
+            # Persist full record set to MongoDB so they survive restarts / multiple workers
+            if ingestion.records:
+                await self._db.dataset_records.insert_many(
+                    [
+                        {
+                            "dataset_id": dataset.dataset_id,
+                            "organization_id": organization_id,
+                            "record": r,
+                        }
+                        for r in ingestion.records
+                    ]
+                )
         else:
             memory_datasets[dataset.dataset_id] = dict_to_mongo(dataset)
 
+        # Also cache in-memory for same-process fast path
         memory_dataset_records[dataset.dataset_id] = ingestion.records
 
         await self._audit.log(
@@ -207,6 +220,24 @@ class DatasetService:
             "ready_for_processing": report.records_valid > 0,
         }
 
-    def get_dataset_records(self, dataset_id: str) -> List[Dict[str, Any]]:
-        """Retrieve stored raw records for a dataset."""
-        return memory_dataset_records.get(dataset_id, [])
+    async def get_dataset_records(self, dataset_id: str) -> List[Dict[str, Any]]:
+        """Retrieve stored raw records for a dataset.
+
+        Checks the in-memory cache first (fast path for same-process requests),
+        then falls back to MongoDB so records survive worker restarts.
+        """
+        in_memory = memory_dataset_records.get(dataset_id, [])
+        if in_memory:
+            return in_memory
+        if self._db is not None:
+            cursor = self._db.dataset_records.find(
+                {"dataset_id": dataset_id},
+                {"_id": 0, "record": 1},
+            )
+            docs = await cursor.to_list(length=100_000)
+            records = [d["record"] for d in docs]
+            # Repopulate cache for subsequent same-process calls
+            if records:
+                memory_dataset_records[dataset_id] = records
+            return records
+        return []

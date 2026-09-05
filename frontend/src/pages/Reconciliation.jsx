@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Zap, BarChart3, Clock, CheckCircle, Brain, Users } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Zap, BarChart3, Clock, CheckCircle, Brain, Database, Sparkles } from 'lucide-react'
 import { startReconciliation } from '../api'
 import { StatCard, Spinner, Alert } from '../components/ui'
 import {
@@ -8,6 +9,10 @@ import {
 } from 'recharts'
 
 export default function Reconciliation() {
+  const [searchParams] = useSearchParams()
+  const datasetId = searchParams.get('dataset_id')
+  const isDatasetMode = Boolean(datasetId)
+
   const [numRecords, setNumRecords] = useState(250)
   const [seed, setSeed] = useState(42)
   const [running, setRunning] = useState(false)
@@ -19,7 +24,10 @@ export default function Reconciliation() {
     setError(null)
     setResult(null)
     try {
-      const res = await startReconciliation({ source: 'synthetic', num_records: numRecords, seed })
+      const payload = isDatasetMode
+        ? { source: 'dataset', dataset_id: datasetId }
+        : { source: 'synthetic', num_records: numRecords, seed }
+      const res = await startReconciliation(payload)
       setResult(res)
     } catch (e) {
       setError(e.message)
@@ -58,40 +66,63 @@ export default function Reconciliation() {
           <div>
             <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Data Source</label>
             <div className="input flex items-center justify-between text-gray-300">
-              <span>Synthetic Dataset</span>
-              <span className="text-xs text-green-400 bg-green-900/30 border border-green-700/30 rounded px-2 py-0.5">DEMO</span>
+              {isDatasetMode ? (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-indigo-400" />
+                    <span className="font-mono text-xs text-indigo-300 truncate max-w-[160px]" title={datasetId}>
+                      {datasetId}
+                    </span>
+                  </span>
+                  <span className="text-xs text-emerald-400 bg-emerald-900/30 border border-emerald-700/30 rounded px-2 py-0.5 shrink-0">UPLOADED</span>
+                </>
+              ) : (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    Synthetic Dataset
+                  </span>
+                  <span className="text-xs text-green-400 bg-green-900/30 border border-green-700/30 rounded px-2 py-0.5">DEMO</span>
+                </>
+              )}
             </div>
           </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
-              Records ({numRecords})
-            </label>
-            <input
-              id="num-records-slider"
-              type="range"
-              min={50}
-              max={1000}
-              step={50}
-              value={numRecords}
-              onChange={(e) => setNumRecords(+e.target.value)}
-              className="w-full accent-brand-500 mt-2"
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>50</span><span>1000</span>
+
+          {!isDatasetMode && (
+            <div>
+              <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
+                Records ({numRecords})
+              </label>
+              <input
+                id="num-records-slider"
+                type="range"
+                min={50}
+                max={1000}
+                step={50}
+                value={numRecords}
+                onChange={(e) => setNumRecords(+e.target.value)}
+                className="w-full accent-brand-500 mt-2"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>50</span><span>1000</span>
+              </div>
             </div>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Random Seed</label>
-            <input
-              id="seed-input"
-              type="number"
-              value={seed}
-              onChange={(e) => setSeed(+e.target.value)}
-              className="input w-full"
-              min={1}
-              max={9999}
-            />
-          </div>
+          )}
+
+          {!isDatasetMode && (
+            <div>
+              <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Random Seed</label>
+              <input
+                id="seed-input"
+                type="number"
+                value={seed}
+                onChange={(e) => setSeed(+e.target.value)}
+                className="input w-full"
+                min={1}
+                max={9999}
+              />
+            </div>
+          )}
         </div>
 
         <div className="mt-6 flex items-center gap-4">
@@ -102,7 +133,7 @@ export default function Reconciliation() {
             className="btn-primary"
           >
             {running ? (
-              <><Spinner size="sm" /> Processing {numRecords} records…</>
+              <><Spinner size="sm" /> {isDatasetMode ? 'Processing dataset…' : `Processing ${numRecords} records…`}</>
             ) : (
               <><Zap className="w-4 h-4" /> Start Reconciliation</>
             )}
@@ -137,7 +168,7 @@ export default function Reconciliation() {
             <StatCard label="Exceptions" value={result.exceptions_created} icon={BarChart3} color="amber"
               subtitle="Require attention" />
             <StatCard label="Processing Time" value={`${result.processing_time_seconds?.toFixed(3)}s`}
-              icon={Clock} color="purple" subtitle={`${numRecords} records`} />
+              icon={Clock} color="purple" subtitle={`${result.records_processed ?? numRecords} records`} />
           </div>
 
           {/* Charts */}
