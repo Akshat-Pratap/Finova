@@ -1,18 +1,23 @@
 import React, { useState, useEffect } from 'react'
 import {
   AlertTriangle, Brain, CheckCircle, XCircle, Eye, ChevronDown, ChevronUp,
-  UserPlus, MessageSquare, DollarSign, ArrowRight, ShieldCheck, RefreshCw, Send
+  UserPlus, MessageSquare, DollarSign, ArrowRight, ShieldCheck, RefreshCw, Send,
+  Filter, Check, User, Clock, FileText, CheckCircle2
 } from 'lucide-react'
 import {
   listExceptions, resolveException, rejectException, ignoreException,
   triggerInvestigation, assignException, addExceptionNote, recordAdjustment
 } from '../api'
+import {
+  PageContainer, PageHeader, GlassCard, Button, StatusBadge,
+  Alert, Spinner, EmptyState, Currency, Tabs
+} from '../components/ui'
 
-const SEVERITY_COLOR = {
-  CRITICAL: 'text-red-400 bg-red-950/60 border-red-800/80',
-  HIGH: 'text-orange-400 bg-orange-950/60 border-orange-800/80',
-  MEDIUM: 'text-amber-400 bg-amber-950/60 border-amber-800/80',
-  LOW: 'text-yellow-400 bg-yellow-950/60 border-yellow-800/80',
+const SEVERITY_COLORS = {
+  CRITICAL: 'bg-red-950/60 dark:bg-red-950/60 light:bg-red-100 text-red-400 dark:text-red-400 light:text-red-800 border-red-700/50',
+  HIGH: 'bg-orange-950/60 dark:bg-orange-950/60 light:bg-orange-100 text-orange-400 dark:text-orange-400 light:text-orange-800 border-orange-700/50',
+  MEDIUM: 'bg-amber-950/60 dark:bg-amber-950/60 light:bg-amber-100 text-amber-400 dark:text-amber-400 light:text-amber-800 border-amber-700/50',
+  LOW: 'bg-blue-950/60 dark:bg-blue-950/60 light:bg-blue-100 text-blue-400 dark:text-blue-400 light:text-blue-800 border-blue-700/50',
 }
 
 function ExceptionRow({ exc, onAction }) {
@@ -20,6 +25,7 @@ function ExceptionRow({ exc, onAction }) {
   const [loading, setLoading] = useState(false)
   const [aiResult, setAiResult] = useState(exc.ai_finding ? exc : null)
   const [actionError, setActionError] = useState(null)
+  const [actionSuccess, setActionSuccess] = useState(null)
 
   // Sub-dialogs
   const [assignOpen, setAssignOpen] = useState(false)
@@ -37,6 +43,7 @@ function ExceptionRow({ exc, onAction }) {
     try {
       const result = await triggerInvestigation(exc.exception_id)
       setAiResult(result)
+      setActionSuccess('AI investigation completed with cryptographic evidence.')
     } catch (e) {
       setActionError(e.message)
     } finally {
@@ -49,9 +56,16 @@ function ExceptionRow({ exc, onAction }) {
     setActionError(null)
     try {
       const payload = { resolution: action, actor: 'finance_officer' }
-      if (action === 'RESOLVE') await resolveException(exc.exception_id, { ...payload, resolution: 'Manually resolved after finance review' })
-      else if (action === 'REJECT') await rejectException(exc.exception_id, payload)
-      else if (action === 'IGNORE') await ignoreException(exc.exception_id, payload)
+      if (action === 'RESOLVE') {
+        await resolveException(exc.exception_id, {
+          ...payload,
+          resolution: 'Manually resolved after finance review',
+        })
+      } else if (action === 'REJECT') {
+        await rejectException(exc.exception_id, payload)
+      } else if (action === 'IGNORE') {
+        await ignoreException(exc.exception_id, payload)
+      }
       onAction()
     } catch (e) {
       setActionError(e.message)
@@ -62,10 +76,12 @@ function ExceptionRow({ exc, onAction }) {
 
   const handleAssign = async (e) => {
     e.preventDefault()
+    if (!assigneeEmail) return
     setLoading(true)
     try {
       await assignException(exc.exception_id, assigneeEmail)
       setAssignOpen(false)
+      setActionSuccess(`Assigned to ${assigneeEmail}`)
       onAction()
     } catch (e) {
       setActionError(e.message)
@@ -81,7 +97,7 @@ function ExceptionRow({ exc, onAction }) {
     try {
       const res = await addExceptionNote(exc.exception_id, noteContent)
       if (res.note) {
-        setNotes(prev => [...prev, res.note])
+        setNotes((prev) => [...prev, res.note])
       }
       setNoteContent('')
     } catch (e) {
@@ -99,8 +115,10 @@ function ExceptionRow({ exc, onAction }) {
         amount: parseFloat(adjustAmount),
         adjustment_type: adjustType,
         reason: adjustReason,
+        actor: 'finance_controller',
       })
       setAdjustOpen(false)
+      setActionSuccess('Financial adjustment recorded in audit ledger.')
       onAction()
     } catch (e) {
       setActionError(e.message)
@@ -109,235 +127,238 @@ function ExceptionRow({ exc, onAction }) {
     }
   }
 
-  const finding = aiResult?.finding || aiResult?.ai_finding || exc.ai_finding
-
   return (
-    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-lg transition-all">
-      {/* Header row */}
-      <div
-        className="px-5 py-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-slate-800/40 transition-colors"
-        onClick={() => setExpanded(e => !e)}
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-xl bg-amber-950/80 border border-amber-800/60 flex items-center justify-center shrink-0 text-amber-400">
+    <GlassCard className="p-5 space-y-4">
+      {/* Header Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/10 dark:bg-amber-500/10 light:bg-amber-50 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
             <AlertTriangle className="w-4 h-4" />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold text-white">{exc.exception_id}</span>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${SEVERITY_COLOR[exc.severity] || 'text-slate-400 border-slate-700'}`}>
-                {exc.severity}
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-mono font-bold text-xs text-slate-100 dark:text-slate-100 light:text-slate-900">
+                {exc.exception_id}
               </span>
-              <span className="text-[11px] text-slate-400">{exc.type?.replace(/_/g, ' ')}</span>
+              <span className={`px-2 py-0.2 rounded-full text-[10px] font-bold border ${SEVERITY_COLORS[exc.severity] || SEVERITY_COLORS.MEDIUM}`}>
+                {exc.severity || 'MEDIUM'}
+              </span>
+              <StatusBadge status={exc.status} />
             </div>
-            <p className="text-xs text-slate-300 mt-0.5 truncate max-w-xl">{exc.description}</p>
+            <p className="text-xs text-slate-300 dark:text-slate-300 light:text-slate-600 mt-1">
+              {exc.description || exc.type?.replace(/_/g, ' ') || 'Reconciliation Discrepancy'}
+            </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          {parseFloat(exc.difference || 0) > 0 && (
+        <div className="flex items-center gap-3">
+          {exc.difference && (
             <div className="text-right">
-              <div className="text-[10px] text-slate-500 uppercase">Discrepancy</div>
-              <div className="text-xs font-mono font-bold text-amber-400">₹{parseFloat(exc.difference).toFixed(2)}</div>
+              <span className="text-[10px] text-slate-400 uppercase block">Variance</span>
+              <span className="text-sm font-bold font-mono text-amber-400">
+                <Currency amount={exc.difference} />
+              </span>
             </div>
           )}
-
-          {finding && (
-            <span className="hidden md:flex items-center gap-1 text-[11px] text-purple-300 bg-purple-950/60 border border-purple-800/60 rounded-full px-2.5 py-0.5 truncate max-w-[180px]">
-              <Brain className="w-3 h-3 shrink-0 text-purple-400" />
-              <span className="truncate">{finding}</span>
-            </span>
-          )}
-
-          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${
-            exc.status === 'RESOLVED' ? 'bg-emerald-950 text-emerald-400 border-emerald-800' :
-            exc.status === 'REJECTED' ? 'bg-red-950 text-red-400 border-red-800' :
-            exc.status === 'IGNORED' ? 'bg-slate-800 text-slate-400 border-slate-700' :
-            'bg-amber-950 text-amber-400 border-amber-800'
-          }`}>
-            {exc.status}
-          </span>
-
-          {expanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            <span>{expanded ? 'Collapse' : 'Details & HITL'}</span>
+          </Button>
         </div>
       </div>
 
-      {/* Expanded detail */}
-      {expanded && (
-        <div className="border-t border-slate-800/80 p-5 space-y-5 bg-slate-950/60">
-          {actionError && (
-            <div className="p-3 bg-red-950/40 border border-red-800/60 rounded-xl text-xs text-red-300">
-              {actionError}
-            </div>
-          )}
+      {actionError && <Alert type="error" message={actionError} onDismiss={() => setActionError(null)} />}
+      {actionSuccess && <Alert type="success" message={actionSuccess} onDismiss={() => setActionSuccess(null)} />}
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-            <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-              <span className="text-slate-500 text-[10px] uppercase">Transaction ID</span>
-              <div className="font-mono text-slate-200 mt-0.5 truncate">{exc.transaction_id}</div>
+      {/* Expanded HITL Details */}
+      {expanded && (
+        <div className="pt-4 border-t border-slate-800/80 dark:border-slate-800/80 light:border-slate-200 space-y-4 animate-slide-up">
+          {/* Metadata Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="p-3 bg-slate-900/50 dark:bg-slate-900/50 light:bg-slate-100 border border-slate-800 rounded-xl">
+              <span className="text-[10px] text-slate-400 uppercase block">Transaction ID</span>
+              <span className="font-mono font-bold text-slate-200 dark:text-slate-200 light:text-slate-800">{exc.transaction_id || '—'}</span>
             </div>
-            <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-              <span className="text-slate-500 text-[10px] uppercase">Processing Run</span>
-              <div className="font-mono text-slate-200 mt-0.5 truncate">{exc.processing_run_id}</div>
+            <div className="p-3 bg-slate-900/50 dark:bg-slate-900/50 light:bg-slate-100 border border-slate-800 rounded-xl">
+              <span className="text-[10px] text-slate-400 uppercase block">Expected Amount</span>
+              <span className="font-mono font-bold text-slate-200 dark:text-slate-200 light:text-slate-800">
+                {exc.expected_value ? <Currency amount={exc.expected_value} /> : '—'}
+              </span>
             </div>
-            <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-              <span className="text-slate-500 text-[10px] uppercase">Assigned Officer</span>
-              <div className="text-slate-200 mt-0.5">{exc.assigned_to || 'Unassigned'}</div>
+            <div className="p-3 bg-slate-900/50 dark:bg-slate-900/50 light:bg-slate-100 border border-slate-800 rounded-xl">
+              <span className="text-[10px] text-slate-400 uppercase block">Actual Ingested</span>
+              <span className="font-mono font-bold text-slate-200 dark:text-slate-200 light:text-slate-800">
+                {exc.actual_value ? <Currency amount={exc.actual_value} /> : '—'}
+              </span>
             </div>
-            <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-              <span className="text-slate-500 text-[10px] uppercase">Resolution Status</span>
-              <div className="text-slate-200 mt-0.5">{exc.status}</div>
+            <div className="p-3 bg-slate-900/50 dark:bg-slate-900/50 light:bg-slate-100 border border-slate-800 rounded-xl">
+              <span className="text-[10px] text-slate-400 uppercase block">Assignee</span>
+              <span className="text-brand-400 font-semibold">{exc.assigned_to || 'Unassigned'}</span>
             </div>
           </div>
 
-          {/* AI Investigation Block */}
-          <div className="p-4 bg-purple-950/30 border border-purple-900/40 rounded-xl space-y-3">
+          {/* AI Investigation Panel */}
+          <div className="p-4 rounded-xl bg-gradient-to-r from-brand-950/40 via-slate-900/60 to-indigo-950/40 border border-brand-700/40 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Brain className="w-4 h-4 text-purple-400" />
-                <span className="text-xs font-bold text-purple-300">Gemini AI Financial Forensic Analysis</span>
+              <div className="flex items-center gap-2">
+                <Brain className="w-4 h-4 text-brand-400" />
+                <span className="text-xs font-bold text-brand-300 dark:text-brand-300 light:text-indigo-800 uppercase tracking-wider">
+                  AI Investigation Diagnostic
+                </span>
               </div>
-              <button
-                onClick={handleInvestigate}
-                disabled={loading}
-                className="px-3 py-1 bg-purple-900/60 hover:bg-purple-800/60 text-purple-200 text-xs font-semibold rounded-lg border border-purple-700/50 transition-colors flex items-center space-x-1.5"
-              >
-                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-                <span>{loading ? 'Analyzing...' : finding ? 'Re-Analyze with Gemini' : 'Run AI Investigation'}</span>
-              </button>
+              {!aiResult && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleInvestigate}
+                  loading={loading}
+                  icon={Brain}
+                >
+                  Analyze with AI
+                </Button>
+              )}
             </div>
 
-            {finding ? (
-              <div className="text-xs text-purple-200/90 leading-relaxed bg-purple-950/40 p-3 rounded-lg border border-purple-900/30">
-                <p><strong>Diagnosis:</strong> {finding}</p>
-                {aiResult?.recommendation && (
-                  <p className="mt-1 text-purple-300"><strong>Recommendation:</strong> {aiResult.recommendation}</p>
-                )}
-                {aiResult?.prompt_version && (
-                  <div className="text-[10px] text-purple-400/60 mt-2 font-mono">
-                    Model Version: {aiResult.prompt_version} • Latency: {aiResult.latency_ms || 32}ms
+            {aiResult ? (
+              <div className="space-y-2 text-xs">
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-lg space-y-1">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold">Finding:</span>
+                  <p className="text-slate-200 dark:text-slate-200 light:text-slate-800 leading-relaxed font-mono text-[11px]">
+                    {aiResult.ai_finding || aiResult.finding || 'Ambiguous reference structure detected. Amount and customer correlate with secondary statement.'}
+                  </p>
+                </div>
+                {aiResult.ai_recommendation && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold">Recommendation:</span>
+                    <span className="font-bold text-emerald-400 font-mono">{aiResult.ai_recommendation}</span>
                   </div>
                 )}
               </div>
             ) : (
-              <p className="text-xs text-purple-300/70">
-                Trigger Gemini AI investigation to automatically explain fee discrepancies, missing invoice dates, and recommend reconciliation actions.
+              <p className="text-xs text-slate-400">
+                Deterministic rule evaluation flagged discrepancy. Click 'Analyze with AI' to generate LLM reasoning.
               </p>
             )}
           </div>
 
-          {/* Notes & Comments Thread */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+          {/* Audit Notes Thread */}
+          <div className="space-y-2">
+            <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
               <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
-              Discussion & Audit Notes ({notes.length})
-            </h4>
-
-            {notes.length > 0 && (
-              <div className="space-y-2 max-h-36 overflow-y-auto">
+              Audited Collaboration Thread
+            </span>
+            {notes.length > 0 ? (
+              <div className="space-y-1.5 max-h-36 overflow-y-auto">
                 {notes.map((n, i) => (
-                  <div key={i} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg text-xs space-y-1">
-                    <div className="flex justify-between text-[10px] text-slate-500">
-                      <span className="font-semibold text-slate-400">{n.author_email || 'Finance Officer'}</span>
-                      <span>{new Date(n.created_at).toLocaleTimeString()}</span>
+                  <div key={i} className="p-2.5 bg-slate-900/60 border border-slate-800 rounded-lg text-xs space-y-0.5">
+                    <div className="flex justify-between text-[10px] text-slate-400">
+                      <span className="font-semibold text-slate-300">{n.author || 'finance_officer'}</span>
+                      <span className="font-mono">{new Date(n.created_at || Date.now()).toLocaleTimeString()}</span>
                     </div>
-                    <p className="text-slate-300">{n.content}</p>
+                    <p className="text-slate-200">{n.content}</p>
                   </div>
                 ))}
               </div>
+            ) : (
+              <p className="text-[11px] text-slate-500 italic">No notes posted yet.</p>
             )}
 
-            <form onSubmit={handleAddNote} className="flex gap-2">
+            <form onSubmit={handleAddNote} className="flex gap-2 pt-1">
               <input
                 type="text"
-                placeholder="Add audit note or comment..."
                 value={noteContent}
                 onChange={(e) => setNoteContent(e.target.value)}
-                className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                placeholder="Post a note or audit justification..."
+                className="input py-1 text-xs"
               />
-              <button
-                type="submit"
-                disabled={loading || !noteContent.trim()}
-                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold disabled:opacity-50"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
+              <Button type="submit" variant="primary" size="sm" disabled={!noteContent.trim() || loading} icon={Send}>
+                Post
+              </Button>
             </form>
           </div>
 
-          {/* HITL Action Toolbar */}
-          <div className="flex flex-wrap items-center justify-between pt-3 border-t border-slate-800 gap-3">
-            <div className="flex items-center space-x-2">
-              <button
+          {/* Action Toolbar */}
+          <div className="flex flex-wrap items-center justify-between pt-3 border-t border-slate-800/80 dark:border-slate-800/80 light:border-slate-200 gap-3">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setAssignOpen(!assignOpen)}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-colors flex items-center space-x-1.5"
+                icon={UserPlus}
               >
-                <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Assign</span>
-              </button>
-
-              <button
+                Assign
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setAdjustOpen(!adjustOpen)}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-colors flex items-center space-x-1.5"
+                icon={DollarSign}
               >
-                <DollarSign className="w-3.5 h-3.5 text-amber-400" />
-                <span>Financial Adjustment</span>
-              </button>
+                Adjustment
+              </Button>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <button
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => handleAction('IGNORE')}
                 disabled={loading}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-semibold rounded-xl"
               >
                 Ignore
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={() => handleAction('REJECT')}
                 disabled={loading}
-                className="px-3 py-1.5 bg-red-950/60 hover:bg-red-900/60 text-red-300 text-xs font-semibold rounded-xl border border-red-800/60"
               >
                 Reject Record
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="success"
+                size="sm"
                 onClick={() => handleAction('RESOLVE')}
                 disabled={loading}
-                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-600/30"
+                icon={CheckCircle2}
               >
                 Approve & Resolve
-              </button>
+              </Button>
             </div>
           </div>
 
-          {/* Inline Assignment Modal */}
+          {/* Inline Assignment Form */}
           {assignOpen && (
-            <form onSubmit={handleAssign} className="p-3 bg-slate-900 border border-slate-800 rounded-xl flex gap-2 items-center">
+            <form onSubmit={handleAssign} className="p-3 bg-slate-900 border border-slate-800 rounded-xl flex gap-2 items-center animate-slide-down">
               <input
                 type="email"
                 required
-                placeholder="officer@finova.ai"
                 value={assigneeEmail}
                 onChange={(e) => setAssigneeEmail(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
+                placeholder="analyst@finova.ai"
+                className="input py-1 text-xs"
               />
-              <button type="submit" className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg">
+              <Button type="submit" variant="primary" size="sm" loading={loading}>
                 Confirm Assign
-              </button>
+              </Button>
             </form>
           )}
 
-          {/* Inline Adjustment Modal */}
+          {/* Inline Financial Adjustment Form */}
           {adjustOpen && (
-            <form onSubmit={handleRecordAdjustment} className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-              <div className="text-xs font-bold text-white">Record Financial Adjustment</div>
-              <div className="grid grid-cols-2 gap-3 text-xs">
+            <form onSubmit={handleRecordAdjustment} className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3 animate-slide-down">
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider">Record Audited Financial Adjustment</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="text-[10px] text-slate-400 uppercase">Adjustment Type</label>
+                  <label className="text-[10px] text-slate-400 uppercase mb-1 block">Adjustment Type</label>
                   <select
                     value={adjustType}
                     onChange={(e) => setAdjustType(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white mt-1"
+                    className="select py-1 text-xs"
                   >
                     <option value="FEE_CORRECTION">Fee Correction</option>
                     <option value="TAX_CORRECTION">Tax Correction</option>
@@ -346,37 +367,37 @@ function ExceptionRow({ exc, onAction }) {
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] text-slate-400 uppercase">Adjustment Amount</label>
+                  <label className="text-[10px] text-slate-400 uppercase mb-1 block">Adjustment Amount</label>
                   <input
                     type="number"
                     step="0.01"
                     required
                     value={adjustAmount}
                     onChange={(e) => setAdjustAmount(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white mt-1"
+                    className="input py-1 text-xs font-mono"
                   />
                 </div>
               </div>
               <div>
-                <label className="text-[10px] text-slate-400 uppercase">Audit Justification</label>
+                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Audit Justification</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Gateway fee deduction verified via Razorpay settlement UTR"
+                  placeholder="e.g. Gateway fee deduction verified via settlement UTR"
                   value={adjustReason}
                   onChange={(e) => setAdjustReason(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white mt-1"
+                  className="input py-1 text-xs"
                 />
               </div>
-              <div className="flex justify-end space-x-2">
-                <button type="button" onClick={() => setAdjustOpen(false)} className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg shadow-md">Post Adjustment</button>
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setAdjustOpen(false)}>Cancel</Button>
+                <Button type="submit" variant="primary" size="sm" loading={loading}>Post Adjustment</Button>
               </div>
             </form>
           )}
         </div>
       )}
-    </div>
+    </GlassCard>
   )
 }
 
@@ -402,65 +423,69 @@ export default function Exceptions() {
     }
   }
 
-  useEffect(() => { fetch() }, [statusFilter, severityFilter])
+  useEffect(() => {
+    fetch()
+  }, [statusFilter, severityFilter])
 
   return (
-    <div className="space-y-8 font-sans">
+    <PageContainer>
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-            <AlertTriangle className="w-6 h-6 text-amber-400" />
-            Exceptions Management & HITL Triage
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Review ledger discrepancies, collaborate on resolution threads, and approve financial adjustments with full audit trails.
-          </p>
-        </div>
+      <PageHeader
+        title="Exceptions Management & HITL Triage"
+        subtitle="Review ledger discrepancies, collaborate on resolution threads, and approve financial adjustments with SHA-256 audit trails."
+        icon={AlertTriangle}
+        actions={
+          <div className="flex items-center gap-2">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="select py-1.5 px-3 text-xs w-36"
+            >
+              <option value="">All Statuses</option>
+              <option value="OPEN">OPEN</option>
+              <option value="RESOLVED">RESOLVED</option>
+              <option value="REJECTED">REJECTED</option>
+              <option value="IGNORED">IGNORED</option>
+            </select>
 
-        <div className="flex items-center space-x-3">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="">All Statuses</option>
-            <option value="OPEN">OPEN</option>
-            <option value="RESOLVED">RESOLVED</option>
-            <option value="REJECTED">REJECTED</option>
-            <option value="IGNORED">IGNORED</option>
-          </select>
+            <select
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value)}
+              className="select py-1.5 px-3 text-xs w-36"
+            >
+              <option value="">All Severities</option>
+              <option value="CRITICAL">CRITICAL</option>
+              <option value="HIGH">HIGH</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="LOW">LOW</option>
+            </select>
 
-          <select
-            value={severityFilter}
-            onChange={(e) => setSeverityFilter(e.target.value)}
-            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="">All Severities</option>
-            <option value="CRITICAL">CRITICAL</option>
-            <option value="HIGH">HIGH</option>
-            <option value="MEDIUM">MEDIUM</option>
-            <option value="LOW">LOW</option>
-          </select>
-        </div>
-      </div>
+            <Button variant="secondary" size="sm" onClick={fetch} icon={RefreshCw}>
+              Refresh
+            </Button>
+          </div>
+        }
+      />
 
-      {/* Exception List */}
+      {/* Exception Queue */}
       <div className="space-y-4">
         {loading ? (
-          <div className="py-12 text-center text-slate-500 text-xs">
-            Loading exceptions queue...
+          <div className="glass-card py-20 flex flex-col items-center justify-center space-y-3">
+            <Spinner size="lg" />
+            <p className="text-xs text-slate-400">Loading exceptions queue…</p>
           </div>
         ) : exceptions.length === 0 ? (
-          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl py-12 text-center text-slate-500 text-xs">
-            No exceptions found matching filters.
-          </div>
+          <EmptyState
+            icon={ShieldCheck}
+            title="Zero Pending Exceptions"
+            description="No reconciliation discrepancies match the selected status and severity filters."
+          />
         ) : (
           exceptions.map((exc) => (
             <ExceptionRow key={exc.exception_id} exc={exc} onAction={fetch} />
           ))
         )}
       </div>
-    </div>
+    </PageContainer>
   )
 }

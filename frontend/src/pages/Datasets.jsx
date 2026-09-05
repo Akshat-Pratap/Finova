@@ -2,9 +2,13 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Upload, FileText, CheckCircle2, AlertTriangle, XCircle, ArrowRight,
-  RefreshCw, Database, Layers, Sparkles, Filter, ChevronRight
+  RefreshCw, Database, Layers, Sparkles, Filter, ChevronRight, Trash2, Check
 } from 'lucide-react'
-import { uploadDataset, listDatasets, validateDataset, generateDataset } from '../api'
+import { uploadDataset, listDatasets, validateDataset, generateDataset, deleteDataset } from '../api'
+import {
+  PageContainer, PageHeader, GlassCard, Button, StatusBadge,
+  Alert, Spinner, EmptyState, ConfirmationDialog
+} from '../components/ui'
 
 const CANONICAL_TARGETS = [
   { key: 'transaction_id', label: 'Transaction ID (Required)' },
@@ -25,7 +29,10 @@ export default function Datasets() {
   const [sampleRows, setSampleRows] = useState([])
   const [validationReport, setValidationReport] = useState(null)
   const [validating, setValidating] = useState(false)
+  const [deletingDataset, setDeletingDataset] = useState(null)
+  const [deleting, setDeleting] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  const [uploadSuccess, setUploadSuccess] = useState(null)
   const fileInputRef = useRef(null)
   const navigate = useNavigate()
 
@@ -44,11 +51,35 @@ export default function Datasets() {
     }
   }
 
+  const handleDeleteConfirm = async () => {
+    if (!deletingDataset) return
+    setDeleting(true)
+    try {
+      const res = await deleteDataset(deletingDataset.dataset_id)
+      if (res.success) {
+        if (activeDataset?.dataset_id === deletingDataset.dataset_id) {
+          setActiveDataset(null)
+          setColumnMapping({})
+          setSampleRows([])
+          setValidationReport(null)
+        }
+        setUploadSuccess(`Dataset '${deletingDataset.filename}' was deleted from MongoDB Atlas.`)
+        await fetchDatasets()
+      }
+    } catch (err) {
+      setUploadError(err.message || 'Failed to delete dataset')
+    } finally {
+      setDeleting(false)
+      setDeletingDataset(null)
+    }
+  }
+
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
     setLoading(true)
     setUploadError(null)
+    setUploadSuccess(null)
     setValidationReport(null)
 
     const formData = new FormData()
@@ -60,6 +91,7 @@ export default function Datasets() {
         setActiveDataset(res)
         setColumnMapping(res.detected_mapping || {})
         setSampleRows(res.sample_rows || [])
+        setUploadSuccess(`Successfully ingested '${res.filename}' with ${res.record_count?.toLocaleString()} records.`)
         fetchDatasets()
       }
     } catch (err) {
@@ -70,9 +102,9 @@ export default function Datasets() {
   }
 
   const handleMappingChange = (rawCol, canonicalTarget) => {
-    setColumnMapping(prev => ({
+    setColumnMapping((prev) => ({
       ...prev,
-      [rawCol]: canonicalTarget || undefined
+      [rawCol]: canonicalTarget || undefined,
     }))
   }
 
@@ -112,38 +144,30 @@ export default function Datasets() {
   }
 
   return (
-    <div className="space-y-8 font-sans">
+    <PageContainer>
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-            <Database className="w-6 h-6 text-indigo-400" />
-            Data Ingestion & Dataset Lifecycle
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Upload CSV/JSON statement files, configure intelligent column mappings, and preview data hygiene.
-          </p>
-        </div>
+      <PageHeader
+        title="Data Ingestion & Dataset Lifecycle"
+        subtitle="Upload statement CSV/JSON files, inspect data hygiene, and map financial schemas."
+        icon={Database}
+        actions={
+          <Button
+            variant="outline"
+            onClick={handleGenerateSynthetic}
+            disabled={loading}
+            icon={Sparkles}
+          >
+            Generate Sandbox Dataset (250 Rows)
+          </Button>
+        }
+      />
 
-        <button
-          onClick={handleGenerateSynthetic}
-          disabled={loading}
-          className="flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-700/50 transition-all shadow-sm"
-        >
-          <Sparkles className="w-4 h-4 text-indigo-400" />
-          <span>Generate 250-Row Sandbox Dataset</span>
-        </button>
-      </div>
-
-      {uploadError && (
-        <div className="p-4 bg-red-950/40 border border-red-800/60 rounded-xl flex items-center space-x-3 text-red-300 text-sm">
-          <XCircle className="w-5 h-5 shrink-0 text-red-400" />
-          <span>{uploadError}</span>
-        </div>
-      )}
+      {/* Alerts */}
+      {uploadError && <Alert type="error" message={uploadError} onDismiss={() => setUploadError(null)} />}
+      {uploadSuccess && <Alert type="success" message={uploadSuccess} onDismiss={() => setUploadSuccess(null)} />}
 
       {/* Upload Dropzone */}
-      <div className="bg-slate-900/70 border border-dashed border-slate-700/80 hover:border-indigo-500/80 rounded-2xl p-8 text-center transition-all bg-gradient-to-b from-slate-900/50 to-slate-950/50">
+      <GlassCard className="p-8 text-center border-dashed border-2 border-slate-700/80 dark:border-slate-700/80 light:border-slate-300 hover:border-brand-500/80 transition-all">
         <input
           ref={fileInputRef}
           type="file"
@@ -151,90 +175,102 @@ export default function Datasets() {
           className="hidden"
           onChange={handleFileUpload}
         />
-        <div className="w-14 h-14 bg-indigo-950/80 border border-indigo-800/50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-indigo-400 shadow-lg shadow-indigo-900/20">
-          <Upload className="w-7 h-7" />
+        <div className="w-14 h-14 bg-brand-500/10 dark:bg-brand-500/10 light:bg-brand-50 border border-brand-500/30 rounded-2xl flex items-center justify-center mx-auto mb-3 text-brand-400 shadow-md">
+          <Upload className="w-6 h-6" />
         </div>
-        <h3 className="text-base font-semibold text-white">
-          Upload Transaction CSV or JSON File
+        <h3 className="text-base font-bold text-slate-100 dark:text-slate-100 light:text-slate-900">
+          Upload Financial Statement or Transaction Dataset
         </h3>
-        <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-          Supports Bank feeds, Payment Provider exports, Gateway statements, and ERP ledgers up to 1GB.
+        <p className="text-xs text-slate-400 dark:text-slate-400 light:text-slate-500 mt-1 max-w-sm mx-auto">
+          Supports Bank CSV feeds, Payment Provider statements, Gateway exports, and ERP ledgers up to 1GB.
         </p>
 
-        <button
-          type="button"
+        <Button
+          variant="primary"
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
-          className="mt-5 px-6 py-2.5 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-600/30 inline-flex items-center space-x-2"
+          loading={loading}
+          icon={FileText}
+          className="mt-4"
         >
-          <FileText className="w-4 h-4" />
-          <span>{loading ? 'Parsing Dataset...' : 'Select File from Computer'}</span>
-        </button>
-      </div>
+          Select CSV or JSON File
+        </Button>
+      </GlassCard>
 
-      {/* Column Mapping & Validation Section */}
+      {/* Active Dataset Mapping & Validation Section */}
       {activeDataset && (
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-6 shadow-xl">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 gap-2">
+        <GlassCard className="p-6 space-y-6 animate-slide-up">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800/80 dark:border-slate-800/80 light:border-slate-200 gap-3">
             <div>
-              <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">Active Ingestion</span>
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <FileText className="w-5 h-5 text-slate-400" />
+              <span className="text-[10px] font-bold text-brand-400 uppercase tracking-wider">Active Ingestion</span>
+              <h2 className="text-base font-bold text-slate-100 dark:text-slate-100 light:text-slate-900 flex items-center gap-2 mt-0.5">
+                <FileText className="w-4 h-4 text-slate-400" />
                 {activeDataset.filename}
-                <span className="text-xs font-normal text-slate-400 bg-slate-800 px-2 py-0.5 rounded-md">
-                  {activeDataset.record_count} rows parsed
+                <span className="text-xs font-mono px-2 py-0.2 rounded-md bg-slate-800 text-slate-300">
+                  {activeDataset.record_count?.toLocaleString()} rows
                 </span>
               </h2>
             </div>
 
-            <div className="flex items-center space-x-3">
-              <button
-                onClick={handleRunValidation}
-                disabled={validating}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition-colors flex items-center space-x-2"
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setDeletingDataset(activeDataset)}
+                icon={Trash2}
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${validating ? 'animate-spin' : ''}`} />
-                <span>{validating ? 'Validating...' : 'Re-Validate Mapping'}</span>
-              </button>
+                Delete
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleRunValidation}
+                loading={validating}
+                icon={RefreshCw}
+              >
+                Validate Mapping
+              </Button>
 
               {validationReport?.ready_for_processing && (
-                <button
+                <Button
+                  variant="success"
+                  size="sm"
                   onClick={handleStartReconciliation}
-                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-700/25 flex items-center space-x-2 transition-all"
+                  icon={ArrowRight}
                 >
-                  <span>Reconcile Dataset</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                  Reconcile Dataset
+                </Button>
               )}
             </div>
           </div>
 
           {/* Mapping Grid */}
           <div>
-            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-indigo-400" />
+            <h3 className="text-xs font-bold text-slate-300 dark:text-slate-300 light:text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-brand-400" />
               Column Semantic Alignment
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.keys(sampleRows[0] || {}).filter(k => !k.startsWith('_')).map((rawCol) => (
-                <div key={rawCol} className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {Object.keys(sampleRows[0] || {}).filter((k) => !k.startsWith('_')).map((rawCol) => (
+                <div key={rawCol} className="p-3.5 bg-slate-900/50 dark:bg-slate-900/50 light:bg-slate-100 border border-slate-800/80 dark:border-slate-800/80 light:border-slate-300 rounded-xl space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono text-indigo-300 font-medium truncate max-w-[140px]" title={rawCol}>
+                    <span className="text-xs font-mono font-bold text-brand-300 dark:text-brand-300 light:text-brand-700 truncate max-w-[140px]" title={rawCol}>
                       {rawCol}
                     </span>
-                    <span className="text-[10px] text-slate-500">Raw Header</span>
+                    <span className="text-[10px] text-slate-400">Raw Header</span>
                   </div>
                   <select
                     value={columnMapping[rawCol] || ''}
                     onChange={(e) => handleMappingChange(rawCol, e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                    className="select py-1 text-xs"
                   >
                     <option value="">-- Ignore / Unmapped --</option>
-                    {CANONICAL_TARGETS.map(t => (
+                    {CANONICAL_TARGETS.map((t) => (
                       <option key={t.key} value={t.key}>{t.label}</option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-slate-500 truncate">
+                  <p className="text-[11px] text-slate-400 truncate">
                     Sample: {String(sampleRows[0]?.[rawCol] ?? 'null')}
                   </p>
                 </div>
@@ -242,103 +278,98 @@ export default function Datasets() {
             </div>
           </div>
 
-          {/* Validation Report Preview */}
+          {/* Validation Report */}
           {validationReport && (
-            <div className="p-5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-4">
-              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+            <div className="p-4 bg-slate-900/60 dark:bg-slate-900/60 light:bg-slate-100 border border-slate-800 rounded-xl space-y-3">
+              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Pre-Validation Hygiene Report
+                Data Hygiene & Validation Summary
               </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-                  <div className="text-[10px] text-slate-400 uppercase">Valid Records</div>
-                  <div className="text-xl font-bold text-emerald-400">{validationReport.valid_count}</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-2.5 bg-slate-900 dark:bg-slate-900 light:bg-white border border-slate-800 rounded-lg">
+                  <span className="text-slate-400 text-[10px] block uppercase">Valid Records</span>
+                  <span className="text-base font-bold font-mono text-emerald-400">{validationReport.valid_count?.toLocaleString()}</span>
                 </div>
-                <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-                  <div className="text-[10px] text-slate-400 uppercase">Invalid Rows</div>
-                  <div className="text-xl font-bold text-red-400">{validationReport.invalid_count}</div>
+                <div className="p-2.5 bg-slate-900 dark:bg-slate-900 light:bg-white border border-slate-800 rounded-lg">
+                  <span className="text-slate-400 text-[10px] block uppercase">Invalid Rows</span>
+                  <span className="text-base font-bold font-mono text-red-400">{validationReport.invalid_count?.toLocaleString()}</span>
                 </div>
-                <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-                  <div className="text-[10px] text-slate-400 uppercase">Duplicates Detected</div>
-                  <div className="text-xl font-bold text-amber-400">{validationReport.duplicates_detected}</div>
+                <div className="p-2.5 bg-slate-900 dark:bg-slate-900 light:bg-white border border-slate-800 rounded-lg">
+                  <span className="text-slate-400 text-[10px] block uppercase">Duplicates</span>
+                  <span className="text-base font-bold font-mono text-amber-400">{validationReport.duplicates_detected?.toLocaleString()}</span>
                 </div>
-                <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
-                  <div className="text-[10px] text-slate-400 uppercase">Ready Status</div>
-                  <div className="text-sm font-bold text-indigo-300 mt-1">
-                    {validationReport.ready_for_processing ? 'VALIDATED' : 'ACTION REQUIRED'}
-                  </div>
+                <div className="p-2.5 bg-slate-900 dark:bg-slate-900 light:bg-white border border-slate-800 rounded-lg">
+                  <span className="text-slate-400 text-[10px] block uppercase">Status</span>
+                  <span className="text-xs font-bold text-brand-400 mt-1 block">
+                    {validationReport.ready_for_processing ? '✓ READY' : 'ACTION REQUIRED'}
+                  </span>
                 </div>
               </div>
-
-              {validationReport.validation_errors?.length > 0 && (
-                <div className="mt-3 p-3 bg-red-950/30 border border-red-900/40 rounded-xl space-y-1">
-                  <div className="text-xs font-semibold text-red-400">Row Hygiene Diagnostics:</div>
-                  <ul className="text-xs text-red-300/90 list-disc list-inside space-y-0.5 max-h-32 overflow-y-auto">
-                    {validationReport.validation_errors.slice(0, 10).map((err, i) => (
-                      <li key={i}>{err}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
             </div>
           )}
-        </div>
+        </GlassCard>
       )}
 
-      {/* Dataset History Table */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-        <h3 className="text-base font-bold text-white flex items-center gap-2">
-          <Database className="w-5 h-5 text-indigo-400" />
+      {/* Dataset History Repository */}
+      <GlassCard className="p-6 space-y-4">
+        <h3 className="section-heading">
+          <Database className="w-4 h-4 text-brand-400" />
           Ingested Datasets Repository
         </h3>
 
         {datasets.length === 0 ? (
-          <div className="text-center py-10 text-slate-500 text-xs">
-            No dataset files uploaded yet. Upload a CSV or JSON file to begin.
-          </div>
+          <EmptyState
+            icon={Database}
+            title="No Datasets Uploaded"
+            description="Upload bank statements, invoices, or payment settlement CSV files to begin."
+          />
         ) : (
-          <div className="overflow-x-auto">
+          <div className="table-container">
             <table className="w-full text-left text-xs">
-              <thead className="text-[11px] text-slate-400 uppercase bg-slate-950/60 border-b border-slate-800">
-                <tr>
-                  <th className="py-3 px-4">Filename</th>
-                  <th className="py-3 px-4">Type</th>
-                  <th className="py-3 px-4">Records</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Uploaded</th>
-                  <th className="py-3 px-4 text-right">Action</th>
+              <thead>
+                <tr className="border-b border-slate-800 dark:border-slate-800 light:border-slate-200 bg-slate-900/40 dark:bg-slate-900/40 light:bg-slate-100 text-slate-400">
+                  <th className="p-3 font-semibold">Filename</th>
+                  <th className="p-3 font-semibold">Type</th>
+                  <th className="p-3 font-semibold font-mono">Records</th>
+                  <th className="p-3 font-semibold">Status</th>
+                  <th className="p-3 font-semibold">Uploaded</th>
+                  <th className="p-3 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 text-slate-300">
+              <tbody>
                 {datasets.map((ds) => (
-                  <tr key={ds.dataset_id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-4 font-medium text-white flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-slate-400" />
-                      {ds.filename}
+                  <tr key={ds.dataset_id} className="table-row">
+                    <td className="p-3 font-medium text-slate-200 dark:text-slate-200 light:text-slate-800 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span className="truncate max-w-[200px]" title={ds.filename}>{ds.filename}</span>
                     </td>
-                    <td className="py-3 px-4 uppercase text-slate-400">{ds.source_type}</td>
-                    <td className="py-3 px-4 font-mono">{ds.record_count}</td>
-                    <td className="py-3 px-4">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                        ds.processing_status === 'COMPLETED' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' :
-                        ds.processing_status === 'VALIDATED' ? 'bg-indigo-950 text-indigo-400 border border-indigo-800' :
-                        ds.processing_status === 'FAILED' ? 'bg-red-950 text-red-400 border border-red-800' :
-                        'bg-slate-800 text-slate-400'
-                      }`}>
-                        {ds.processing_status}
-                      </span>
+                    <td className="p-3 uppercase text-slate-400 font-mono text-[11px]">{ds.source_type}</td>
+                    <td className="p-3 font-mono text-slate-300 dark:text-slate-300 light:text-slate-700">{ds.record_count?.toLocaleString()}</td>
+                    <td className="p-3">
+                      <StatusBadge status={ds.processing_status} />
                     </td>
-                    <td className="py-3 px-4 text-slate-400">
+                    <td className="p-3 text-slate-400">
                       {new Date(ds.uploaded_at).toLocaleDateString()}
                     </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={() => navigate(`/reconciliation?dataset_id=${ds.dataset_id}`)}
-                        className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1"
-                      >
-                        <span>Reconcile</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
+                    <td className="p-3 text-right">
+                      <div className="inline-flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate(`/reconciliation?dataset_id=${ds.dataset_id}`)}
+                          icon={ArrowRight}
+                        >
+                          Reconcile
+                        </Button>
+                        <button
+                          onClick={() => setDeletingDataset(ds)}
+                          className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-800/40 transition-colors"
+                          title="Delete Dataset"
+                          aria-label="Delete Dataset"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -346,7 +377,18 @@ export default function Datasets() {
             </table>
           </div>
         )}
-      </div>
-    </div>
+      </GlassCard>
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmationDialog
+        isOpen={Boolean(deletingDataset)}
+        onClose={() => setDeletingDataset(null)}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Dataset"
+        message={`Are you sure you want to permanently delete '${deletingDataset?.filename}' from MongoDB Atlas?`}
+        confirmLabel="Delete Dataset"
+        loading={deleting}
+      />
+    </PageContainer>
   )
 }

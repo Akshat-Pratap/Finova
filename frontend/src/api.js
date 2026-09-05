@@ -56,6 +56,7 @@ export const uploadDataset = (formData) => api.post('/api/v1/datasets/upload', f
 })
 export const listDatasets = (params) => api.get('/api/v1/datasets', { params })
 export const getDataset = (id) => api.get(`/api/v1/datasets/${id}`)
+export const deleteDataset = (id) => api.delete(`/api/v1/datasets/${id}`)
 export const validateDataset = (id, mapping) => api.post(`/api/v1/datasets/${id}/validate`, { column_mapping: mapping }, { timeout: 300000 })
 export const generateDataset = (params) => api.post('/api/v1/datasets/generate', null, { params })
 
@@ -63,6 +64,7 @@ export const generateDataset = (params) => api.post('/api/v1/datasets/generate',
 export const startReconciliation = (data) => api.post('/api/v1/reconciliation/run', data, { timeout: 600000 })
 export const getJobStatus = (jobId) => api.get(`/api/v1/reconciliation/job/${jobId}`)
 export const getRunDetails = (runId) => api.get(`/api/v1/reconciliation/${runId}`)
+export const getRunStatus = (runId) => api.get(`/api/v1/reconciliation/runs/${runId}`)
 export const listRuns = (params) => api.get('/api/v1/reconciliation', { params })
 
 // --- Transactions Explorer ---
