@@ -1,0 +1,18 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+page.on('console', msg => console.log('BROWSER:', msg.text()));
+page.on('pageerror', err => console.log('PAGEERROR:', err.message));
+await page.goto('http://localhost:5173/login', { waitUntil: 'networkidle' });
+await page.locator('input[name="finova-work-email"]').fill('test20260905165004@example.com');
+await page.locator('input[name="finova-work-password"]').fill('TestPass123!');
+await page.locator('button[type="submit"]').click();
+await page.waitForTimeout(5000);
+console.log('after login url', page.url());
+await page.screenshot({ path: 'D:\\My Projects\\Finova\\frontend\\dashboard.png', fullPage: true });
+const text = await page.locator('body').innerText();
+console.log('text snippet', text.slice(0, 2000));
+console.log('has Dashboard?', text.includes('Financial Operations Dashboard'));
+console.log('has FINOVA?', text.includes('FINOVA'));
+console.log('has plain background only?', text.trim().length < 100 ? 'YES BLANK' : 'HAS CONTENT');
+await browser.close();

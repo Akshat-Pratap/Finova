@@ -169,15 +169,15 @@ export default function Login() {
           `}</style>
 
           <form
-            className="space-y-5 relative"
+            className="space-y-5 relative stagger"
             onSubmit={handleSubmit}
             autoComplete="off"
             data-lpignore="true"
             data-form-type="other"
           >
-            {/* Honeypot fields to trap Chrome autofill */}
-            <input type="text" name="prevent_autofill_username" autoComplete="off" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: '-9999px', opacity: 0, height: 0, width: 0 }} />
-            <input type="password" name="prevent_autofill_password" autoComplete="off" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: '-9999px', opacity: 0, height: 0, width: 0 }} />
+            {/* Honeypot fields to trap Chrome autofill — excluded from stagger */}
+            <input className="no-stagger" type="text" name="prevent_autofill_username" autoComplete="off" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: '-9999px', opacity: 0, height: 0, width: 0 }} />
+            <input className="no-stagger" type="password" name="prevent_autofill_password" autoComplete="off" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: '-9999px', opacity: 0, height: 0, width: 0 }} />
 
             {error && (
               <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center space-x-2.5 text-rose-600 dark:text-rose-400 text-xs font-medium backdrop-blur">
@@ -241,7 +241,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="relative w-full py-3.5 text-sm font-bold rounded-2xl flex items-center justify-center gap-2 overflow-hidden bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-500 hover:from-brand-500 hover:to-indigo-500 text-white shadow-xl shadow-brand-500/20 hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+              className="relative w-full py-3.5 text-sm font-bold rounded-2xl flex items-center justify-center gap-2 overflow-hidden bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-500 hover:from-brand-500 hover:to-indigo-500 text-white shadow-xl shadow-brand-500/20 hover:shadow-brand-500/30 hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 btn-shine group"
             >
               {/* Shimmer sweep */}
               <span

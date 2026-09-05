@@ -146,15 +146,20 @@ export default function Layout() {
             end={item.end}
             onClick={() => setMobileMenuOpen(false)}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 group ${
+              `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 group relative overflow-hidden ${
                 isActive
-                  ? 'bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/30 font-bold'
+                  ? 'bg-gradient-to-r from-brand-600 via-indigo-600 to-cyan-600 text-white shadow-lg shadow-indigo-600/30 font-bold'
                   : 'text-slate-400 dark:text-slate-400 light:text-slate-600 hover:text-slate-100 dark:hover:text-slate-100 light:hover:text-slate-900 hover:bg-slate-800/50 dark:hover:bg-slate-800/50 light:hover:bg-slate-100'
               }`
             }
           >
-            <item.icon className="w-4 h-4 shrink-0 transition-transform group-hover:scale-110" />
-            <span className="truncate">{item.label}</span>
+            {({ isActive }) => (
+              <>
+                {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-white/90 shadow-glow" style={{ animation: 'rise 0.35s ease-out' }} />}
+                <item.icon className={`w-4 h-4 shrink-0 transition-transform duration-200 ${isActive ? 'scale-110' : 'group-hover:scale-110 group-hover:rotate-3'}`} />
+                <span className="truncate">{item.label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </nav>
@@ -190,7 +195,7 @@ export default function Layout() {
   )
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-950 dark:bg-slate-950 light:bg-slate-50 font-sans text-slate-100 dark:text-slate-100 light:text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-transparent font-sans text-slate-100 dark:text-slate-100 light:text-slate-900 relative z-10">
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex w-64 glass-panel rounded-none border-r border-slate-800/80 dark:border-slate-800/80 light:border-slate-200 flex-col flex-shrink-0 z-30 shadow-xl">
         {sidebarContent}
@@ -235,9 +240,12 @@ export default function Layout() {
 
           {/* Right Header Utilities */}
           <div className="flex items-center gap-3">
-            {/* Live Environment Badge */}
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 dark:bg-emerald-950/50 light:bg-emerald-100 border border-emerald-800/50 dark:border-emerald-800/50 light:border-emerald-300 text-emerald-400 dark:text-emerald-400 light:text-emerald-800 text-[11px] font-mono font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            {/* Live Environment Badge — pulse-ring */}
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 dark:bg-emerald-950/50 light:bg-emerald-100 border border-emerald-800/50 dark:border-emerald-800/50 light:border-emerald-300 text-emerald-400 dark:text-emerald-400 light:text-emerald-800 text-[11px] font-mono font-bold relative">
+              <span className="relative w-2 h-2 flex items-center justify-center">
+                <span className="absolute inset-0 rounded-full bg-emerald-400 pulse-ring" style={{ color: '#22c55e' }} />
+                <span className="relative w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              </span>
               <span>LIVE</span>
             </div>
 

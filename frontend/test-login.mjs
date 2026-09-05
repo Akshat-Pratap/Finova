@@ -1,0 +1,27 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+page.on('console', msg => console.log('BROWSER:', msg.text()));
+page.on('pageerror', err => console.log('PAGEERROR:', err.message));
+await page.goto('http://localhost:5173/login', { waitUntil: 'networkidle' });
+await page.screenshot({ path: 'D:\\My Projects\\Finova\\frontend\\pre-login.png', fullPage: true });
+console.log('pre-login screenshot done');
+const email = page.locator('input[name="finova-work-email"]').first();
+const pass = page.locator('input[name="finova-work-password"]').first();
+console.log('found inputs', await email.count(), await pass.count());
+await email.fill('cfo@finova.ai');
+await pass.fill('FinovaDemo2026!');
+await page.screenshot({ path: 'D:\\My Projects\\Finova\\frontend\\filled.png', fullPage: true });
+const btn = page.locator('button[type="submit"]').first();
+console.log('btn', await btn.textContent());
+await btn.click();
+await page.waitForTimeout(4000);
+console.log('after click url', page.url());
+await page.screenshot({ path: 'D:\\My Projects\\Finova\\frontend\\post-login.png', fullPage: true });
+const body = await page.content();
+console.log('body length', body.length);
+console.log(body.slice(0, 2000));
+// check dashboard text
+const text = await page.locator('body').innerText();
+console.log('visible text snippet', text.slice(0, 1000));
+await browser.close();

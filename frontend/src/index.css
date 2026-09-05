@@ -42,6 +42,8 @@
 
   html {
     scroll-behavior: smooth;
+    background-color: var(--bg-primary);
+    min-height: 100vh;
   }
 
   body {
@@ -104,10 +106,23 @@
     border: 1px solid var(--border-color);
     border-radius: 0.875rem;
     box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.1);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .glass-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, transparent 55%);
+    pointer-events: none;
+    opacity: 0.7;
   }
 
   .glass-card:hover {
-    border-color: rgba(97, 114, 243, 0.35);
+    border-color: rgba(97, 114, 243, 0.32);
+    box-shadow: 0 8px 32px -8px rgba(97,114,243,0.18), 0 4px 20px -2px rgba(0,0,0,0.12);
   }
 
   .card {
@@ -119,14 +134,61 @@
     box-shadow: 0 0 25px var(--brand-glow);
   }
 
+  /* Gradient border utility — conic masked pseudo */
+  .gradient-border {
+    position: relative;
+    border-radius: 0.875rem;
+  }
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1.5px;
+    background: conic-gradient(from 180deg at 50% 50%, #6172f3, #22d3ee, #e879f9, #8b5cf6, #6172f3);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.55;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .gradient-border:hover::before {
+    opacity: 0.95;
+    animation: gradientShift 3s ease infinite;
+    background-size: 200% 200%;
+  }
+  .border-aurora-brand::before { background: conic-gradient(from 180deg at 50% 50%, #4f53e8, #6172f3, #8098f9, #4f53e8); }
+  .border-aurora-cyan::before { background: conic-gradient(from 180deg at 50% 50%, #0891b2, #22d3ee, #67e8f9, #0891b2); }
+  .border-aurora-fuchsia::before { background: conic-gradient(from 180deg at 50% 50%, #c026d3, #e879f9, #f0abfc, #c026d3); }
+  .border-aurora-teal::before { background: conic-gradient(from 180deg at 50% 50%, #0d9488, #2dd4bf, #5eead4, #0d9488); }
+  .border-aurora-emerald::before { background: conic-gradient(from 180deg at 50% 50%, #059669, #22c55e, #86efac, #059669); }
+  .border-aurora-amber::before { background: conic-gradient(from 180deg at 50% 50%, #d97706, #f59e0b, #fcd34d, #d97706); }
+
   /* Standardized Buttons */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-medium text-xs tracking-wide transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed select-none;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-medium text-xs tracking-wide transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed select-none relative overflow-hidden;
   }
 
   .btn-primary {
     @apply btn bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-lg shadow-indigo-600/25 hover:shadow-indigo-600/40 hover:-translate-y-0.5 active:translate-y-0;
   }
+
+  /* btn shine sweep */
+  .btn-shine::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 45%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    transform: translateX(-130%) skewX(-12deg);
+    transition: transform 0.6s ease;
+    pointer-events: none;
+  }
+  .btn-shine:hover::after {
+    transform: translateX(130%) skewX(-12deg);
+  }
+  .btn-shine:hover { transform: translateY(-1px); }
+  .btn-shine:active { transform: translateY(0); }
 
   .btn-secondary {
     @apply btn bg-slate-200/80 hover:bg-slate-300 text-slate-800 border border-slate-300/80 dark:bg-slate-800/60 dark:hover:bg-slate-700/80 dark:text-slate-200 dark:border-slate-700/60;
@@ -158,11 +220,11 @@
   }
 
   .badge-ai {
-    @apply badge bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-brand-950/50 dark:text-brand-300 dark:border-brand-700/40;
+    @apply badge bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-950/50 dark:text-cyan-300 dark:border-cyan-700/40;
   }
 
   .badge-manual {
-    @apply badge bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40;
+    @apply badge bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300 dark:bg-fuchsia-950/40 dark:text-fuchsia-300 dark:border-fuchsia-700/40;
   }
 
   .badge-duplicate {
@@ -177,9 +239,26 @@
     @apply badge bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700/40;
   }
 
-  /* Stat KPI Card */
+  /* Stat KPI Card — enriched */
   .stat-card {
-    @apply glass-card p-5 hover:border-brand-500/50 hover:shadow-glow-sm transition-all duration-200 relative overflow-hidden;
+    @apply glass-card p-5 hover:border-brand-500/50 hover:shadow-glow-sm transition-all duration-300 relative overflow-hidden;
+  }
+  .stat-card:hover {
+    transform: translateY(-3px);
+  }
+  .stat-card::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, currentColor, transparent);
+    opacity: 0;
+    transform: scaleX(0.3);
+    transition: opacity 0.35s ease, transform 0.45s ease;
+  }
+  .stat-card:hover::after {
+    opacity: 0.35;
+    transform: scaleX(1);
   }
 
   /* Form Inputs */
@@ -206,7 +285,49 @@
   }
 
   .table-row {
-    @apply border-b border-slate-200 dark:border-slate-800/70 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors duration-150;
+    @apply border-b border-slate-200 dark:border-slate-800/70 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors duration-150 relative;
+  }
+  .table-row::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(97,114,243,0.06), transparent);
+    opacity: 0;
+    transform: translateX(-100%);
+    transition: transform 0.6s ease, opacity 0.3s ease;
+    pointer-events: none;
+  }
+  .table-row:hover::after {
+    opacity: 1;
+    transform: translateX(100%);
+  }
+
+  /* Stagger utility — entrance cascade (hidden inputs excluded) — safe: no base opacity so content stays visible if animation fails/cached */
+  .stagger > *:not(.no-stagger) { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) forwards; }
+  .stagger > *:nth-child(1):not(.no-stagger) { animation-delay: 0.04s; }
+  .stagger > *:nth-child(2):not(.no-stagger) { animation-delay: 0.09s; }
+  .stagger > *:nth-child(3):not(.no-stagger) { animation-delay: 0.14s; }
+  .stagger > *:nth-child(4):not(.no-stagger) { animation-delay: 0.19s; }
+  .stagger > *:nth-child(5):not(.no-stagger) { animation-delay: 0.24s; }
+  .stagger > *:nth-child(6):not(.no-stagger) { animation-delay: 0.29s; }
+  .stagger > *:nth-child(7):not(.no-stagger) { animation-delay: 0.34s; }
+  .stagger > *:nth-child(8):not(.no-stagger) { animation-delay: 0.39s; }
+
+  /* Modal settle */
+  .modal-enter {
+    animation: modalSettle 0.32s cubic-bezier(0.16,1,0.3,1) forwards;
+  }
+  @keyframes modalSettle {
+    0% { transform: scale(0.96) translateY(6px); opacity: 0; }
+    100% { transform: scale(1) translateY(0); opacity: 1; }
+  }
+  /* success banner slide-in */
+  .banner-slide-in {
+    animation: bannerSlide 0.42s cubic-bezier(0.16,1,0.3,1) forwards;
+  }
+  @keyframes bannerSlide {
+    0% { transform: translateY(-10px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
   }
 }
 
@@ -232,9 +353,46 @@
   .animate-slide-up {
     animation: slideUp 0.3s ease-out;
   }
+
+  /* chart grow bar — scaleY origin bottom */
+  .chart-grow { transform-origin: bottom; animation: growBar 0.7s cubic-bezier(0.16,1,0.3,1) forwards; }
+
+  /* pulse-ring wrapper */
+  .pulse-ring {
+    position: relative;
+  }
+  .pulse-ring::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: currentColor;
+    opacity: 0.45;
+    animation: pulseRing 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    pointer-events: none;
+  }
 }
 
-/* Recharts Glass Tooltip */
+/* Global keyframes — force-included (Tailwind JIT only emits when animate-* class is used) */
+@keyframes rise { 0% { transform: translateY(12px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+@keyframes auroraDrift { 0% { transform: translate(-4%, -2%) scale(1) rotate(0deg); opacity: 0.55; } 50% { transform: translate(3%, 4%) scale(1.06) rotate(1deg); opacity: 0.78; } 100% { transform: translate(5%, -1%) scale(1.02) rotate(-0.5deg); opacity: 0.62; } }
+@keyframes float { 0% { transform: translateY(0px) translateX(0px) scale(1); } 50% { transform: translateY(-14px) translateX(6px) scale(1.02); } 100% { transform: translateY(-6px) translateX(-4px) scale(1); } }
+@keyframes shimmer { 0% { transform: translateX(-120%) skewX(-12deg); } 60% { transform: translateX(120%) skewX(-12deg); } 100% { transform: translateX(120%) skewX(-12deg); } }
+@keyframes sheen { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
+@keyframes pulseRing { 0% { transform: scale(0.7); opacity: 0.85; } 70% { transform: scale(1.6); opacity: 0; } 100% { transform: scale(1.6); opacity: 0; } }
+@keyframes scan { 0% { transform: translateY(-100%); opacity: 0; } 15% { opacity: 0.6; } 85% { opacity: 0.6; } 100% { transform: translateY(260%); opacity: 0; } }
+@keyframes growBar { 0% { transform: scaleY(0); opacity: 0; } 100% { transform: scaleY(1); opacity: 1; } }
+@keyframes draw { 0% { stroke-dashoffset: 1000; opacity: 0; } 100% { stroke-dashoffset: 0; opacity: 1; } }
+@keyframes gradientShift { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes fadeIn { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes slideUp { 0% { transform: translateY(8px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+@keyframes slideDown { 0% { transform: translateY(-8px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+
+/* Recharts Glass Tooltip — with slide-up entrance */
+.recharts-tooltip-wrapper {
+  animation: rise 0.28s cubic-bezier(0.16,1,0.3,1) forwards;
+}
 .dark .recharts-default-tooltip {
   background-color: rgba(15, 23, 42, 0.92) !important;
   border: 1px solid rgba(255, 255, 255, 0.1) !important;
@@ -271,4 +429,23 @@
 .light .recharts-cartesian-grid-horizontal line,
 .light .recharts-cartesian-grid-vertical line {
   stroke: rgba(0, 0, 0, 0.06) !important;
+}
+
+/* prefers-reduced-motion — disable motion but keep content visible */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .aurora-orb, .pulse-ring::before, .btn-shine::after {
+    animation: none !important;
+  }
+  .stagger > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  body::before { animation: none !important; }
 }

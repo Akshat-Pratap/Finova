@@ -1,15 +1,47 @@
 /**
  * Finova — Premium Shared UI Components
- * Complete Glassmorphic Design System with Dark & Light Mode Support.
+ * Vibrant Liquid design system — count-up, shimmer, shine, pulse-ring.
  */
 
-import React from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   AlertTriangle, CheckCircle, Info, XCircle, Sun, Moon,
   ChevronRight, ArrowUpRight, TrendingUp, TrendingDown,
   ShieldCheck, Brain, Clock, Zap, RefreshCw, X
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
+
+// tiny rAF count-up hook
+export function useCountUp(target, { duration = 700, enabled = true } = {}) {
+  const [val, setVal] = useState(0)
+  const raf = useRef(null)
+  const start = useRef(null)
+  const from = useRef(0)
+
+  useEffect(() => {
+    if (!enabled) { setVal(target); return }
+    // parse numeric part if string like "94%"
+    const numeric = typeof target === 'string' ? parseFloat(target.replace(/[^0-9.\-]/g, '')) : Number(target)
+    const suffix = typeof target === 'string' ? target.replace(/[0-9.\-,\s]/g, '') : ''
+    const isNumeric = !Number.isNaN(numeric)
+    if (!isNumeric) { setVal(target); return }
+    from.current = 0
+    start.current = null
+    const step = (ts) => {
+      if (start.current === null) start.current = ts
+      const p = Math.min((ts - start.current) / duration, 1)
+      const eased = 1 - Math.pow(1 - p, 3) // ease-out cubic
+      const cur = from.current + (numeric - from.current) * eased
+      // keep formatting: if target had + % keep roughly integer
+      setVal(suffix ? `${Math.round(cur)}${suffix}` : Math.round(cur).toLocaleString())
+      if (p < 1) raf.current = requestAnimationFrame(step)
+      else setVal(target)
+    }
+    raf.current = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf.current)
+  }, [target, duration, enabled])
+  return val
+}
 
 // Page Container Wrapper
 export function PageContainer({ children, className = '' }) {
@@ -26,7 +58,7 @@ export function PageHeader({ title, subtitle, badge, icon: Icon, actions }) {
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-800/40 dark:border-slate-800/40 light:border-slate-200">
       <div className="flex items-start gap-3">
         {Icon && (
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600/30 to-indigo-500/20 border border-brand-500/30 flex items-center justify-center text-brand-400 shrink-0 mt-0.5 shadow-sm">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600/30 to-indigo-500/20 border border-brand-500/30 flex items-center justify-center text-brand-400 shrink-0 mt-0.5 shadow-sm animate-float">
             <Icon className="w-5 h-5" />
           </div>
         )}
@@ -54,10 +86,13 @@ export function PageHeader({ title, subtitle, badge, icon: Icon, actions }) {
 }
 
 // Liquid Glass Card
-export function GlassCard({ children, className = '', glow = false, onClick, ...props }) {
+export function GlassCard({ children, className = '', glow = false, accent, gradientBorder = false, onClick, ...props }) {
+  const accentCls = accent ? ` border-${accent}-500/20` : ''
+  const glowCls = glow ? ' shadow-glow border-brand-500/40' : ''
+  const gradCls = gradientBorder ? ` gradient-border border-aurora-${accent || 'brand'}` : ''
   return (
     <div
-      className={`glass-card p-5 ${glow ? 'shadow-glow border-brand-500/40' : ''} ${className}`}
+      className={`glass-card p-5${glowCls}${gradCls}${accentCls} ${className}`}
       onClick={onClick}
       {...props}
     >
@@ -66,7 +101,7 @@ export function GlassCard({ children, className = '', glow = false, onClick, ...
   )
 }
 
-// KPI Stat Card
+// KPI Stat Card — vibrant mapping + count-up + breathing chip
 export function StatCard({
   label,
   value,
@@ -75,46 +110,78 @@ export function StatCard({
   trend,
   trendDirection = 'up',
   color = 'brand',
+  accent,
   className = '',
 }) {
+  const colorKey = accent || color
   const colorMap = {
     brand: {
       text: 'text-brand-400 dark:text-brand-400 light:text-indigo-600',
       bg: 'bg-brand-500/10 dark:bg-brand-500/10 light:bg-indigo-50 border-brand-500/30',
       icon: 'text-brand-400',
+      glow: 'shadow-glow-sm',
+    },
+    cyan: {
+      text: 'text-cyan-400 dark:text-cyan-300 light:text-cyan-600',
+      bg: 'bg-cyan-500/10 dark:bg-cyan-500/10 light:bg-cyan-50 border-cyan-500/30',
+      icon: 'text-cyan-400',
+      glow: 'shadow-glow-cyan-sm',
+    },
+    fuchsia: {
+      text: 'text-fuchsia-400 dark:text-fuchsia-300 light:text-fuchsia-600',
+      bg: 'bg-fuchsia-500/10 dark:bg-fuchsia-500/10 light:bg-fuchsia-50 border-fuchsia-500/30',
+      icon: 'text-fuchsia-400',
+      glow: 'shadow-glow-fuchsia-sm',
+    },
+    teal: {
+      text: 'text-teal-400 dark:text-teal-300 light:text-teal-600',
+      bg: 'bg-teal-500/10 dark:bg-teal-500/10 light:bg-teal-50 border-teal-500/30',
+      icon: 'text-teal-400',
+      glow: 'shadow-glow-teal-sm',
+    },
+    emerald: {
+      text: 'text-emerald-400 dark:text-emerald-400 light:text-emerald-600',
+      bg: 'bg-emerald-500/10 dark:bg-emerald-500/10 light:bg-emerald-50 border-emerald-500/30',
+      icon: 'text-emerald-400',
+      glow: 'shadow-glow-emerald',
     },
     green: {
       text: 'text-emerald-400 dark:text-emerald-400 light:text-emerald-600',
       bg: 'bg-emerald-500/10 dark:bg-emerald-500/10 light:bg-emerald-50 border-emerald-500/30',
       icon: 'text-emerald-400',
+      glow: 'shadow-glow-emerald',
     },
     amber: {
       text: 'text-amber-400 dark:text-amber-400 light:text-amber-600',
       bg: 'bg-amber-500/10 dark:bg-amber-500/10 light:bg-amber-50 border-amber-500/30',
       icon: 'text-amber-400',
+      glow: 'shadow-glow-amber',
     },
     red: {
       text: 'text-red-400 dark:text-red-400 light:text-red-600',
       bg: 'bg-red-500/10 dark:bg-red-500/10 light:bg-red-50 border-red-500/30',
       icon: 'text-red-400',
+      glow: '',
     },
     purple: {
-      text: 'text-purple-400 dark:text-purple-400 light:text-purple-600',
-      bg: 'bg-purple-500/10 dark:bg-purple-500/10 light:bg-purple-50 border-purple-500/30',
-      icon: 'text-purple-400',
+      text: 'text-fuchsia-400 dark:text-fuchsia-300 light:text-purple-600',
+      bg: 'bg-fuchsia-500/10 dark:bg-fuchsia-500/10 light:bg-purple-50 border-fuchsia-500/30',
+      icon: 'text-fuchsia-400',
+      glow: 'shadow-glow-fuchsia-sm',
     },
   }
 
-  const chosen = colorMap[color] || colorMap.brand
+  const chosen = colorMap[colorKey] || colorMap.brand
+  const displayValue = useCountUp(value, { duration: 700 })
 
   return (
-    <div className={`stat-card ${className}`}>
+    <div className={`stat-card group ${chosen.glow} ${className}`}>
       <div className="flex items-start justify-between mb-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-400 light:text-slate-500">
           {label}
         </p>
         {Icon && (
-          <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${chosen.bg}`}>
+          <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${chosen.bg} group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 animate-float`} style={{ animationDuration: '5s' }}>
             <Icon className={`w-4 h-4 ${chosen.icon}`} />
           </div>
         )}
@@ -122,11 +189,11 @@ export function StatCard({
 
       <div className="flex items-baseline justify-between gap-2">
         <p className={`text-2xl sm:text-3xl font-black font-mono tracking-tight ${chosen.text}`}>
-          {value}
+          {displayValue}
         </p>
         {trend && (
           <span
-            className={`inline-flex items-center gap-0.5 text-xs font-semibold ${
+            className={`inline-flex items-center gap-0.5 text-xs font-semibold group-hover:translate-x-0.5 transition-transform duration-200 ${
               trendDirection === 'up' ? 'text-emerald-400' : 'text-amber-400'
             }`}
           >
@@ -145,7 +212,7 @@ export function StatCard({
   )
 }
 
-// Status Badge Mapping
+// Status Badge Mapping — updated to vibrant color-meaning system
 export function StatusBadge({ status }) {
   const map = {
     MATCHED: 'badge-matched',
@@ -189,21 +256,26 @@ export function StatusBadge({ status }) {
   return <span className={cls}>{labels[status] || status}</span>
 }
 
-// Animated Confidence Progress Bar
+// Animated Confidence Progress Bar — shimmer sweep
 export function ConfidenceBar({ value }) {
   const pct = Math.round((value || 0) * 100)
   const color =
     pct >= 90 ? 'bg-emerald-500' :
-    pct >= 70 ? 'bg-brand-500' :
+    pct >= 70 ? 'bg-cyan-500' :
     pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-slate-800 dark:bg-slate-800 light:bg-slate-200 rounded-full overflow-hidden">
+      <div className="flex-1 h-1.5 bg-slate-800 dark:bg-slate-800 light:bg-slate-200 rounded-full overflow-hidden relative">
         <div
-          className={`h-full rounded-full transition-all duration-500 ${color}`}
-          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-        />
+          className={`h-full rounded-full ${color} relative overflow-hidden`}
+          style={{
+            width: `${Math.min(100, Math.max(0, pct))}%`,
+            transition: 'width 0.9s cubic-bezier(0.16,1,0.3,1)',
+          }}
+        >
+          <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent" style={{ animation: 'sheen 1.8s ease-out infinite' }} />
+        </div>
       </div>
       <span className="text-xs font-mono font-semibold text-slate-400 dark:text-slate-400 light:text-slate-600 w-9 text-right">
         {pct}%
@@ -212,7 +284,7 @@ export function ConfidenceBar({ value }) {
   )
 }
 
-// Standard Button
+// Standard Button — with shine + icon nudge
 export function Button({
   children,
   variant = 'primary',
@@ -226,10 +298,10 @@ export function Button({
   ...props
 }) {
   const variantMap = {
-    primary: 'btn-primary',
+    primary: 'btn-primary btn-shine',
     secondary: 'btn-secondary',
-    danger: 'btn-danger',
-    success: 'btn-success',
+    danger: 'btn-danger btn-shine',
+    success: 'btn-success btn-shine',
     outline: 'btn-outline',
     ghost: 'btn-ghost',
   }
@@ -245,15 +317,18 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled || loading}
-      className={`${variantMap[variant] || variantMap.primary} ${sizeMap[size] || sizeMap.md} ${className}`}
+      className={`${variantMap[variant] || variantMap.primary} ${sizeMap[size] || sizeMap.md} group ${className}`}
       {...props}
     >
       {loading ? (
         <Spinner size="sm" />
       ) : Icon ? (
-        <Icon className="w-3.5 h-3.5 shrink-0" />
+        <Icon className="w-3.5 h-3.5 shrink-0 group-hover:translate-x-0.5 group-hover:scale-110 transition-transform duration-200" />
       ) : null}
       {children}
+      {variant === 'primary' && !loading && (
+        <span className="absolute inset-0 rounded-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300" style={{ boxShadow: '0 0 0 2px rgba(97,114,243,0.25)' }} />
+      )}
     </button>
   )
 }
@@ -271,7 +346,7 @@ export function EmptyState({ icon: Icon, title, description, action }) {
   return (
     <div className="glass-card flex flex-col items-center justify-center py-12 px-6 text-center">
       {Icon && (
-        <div className="w-12 h-12 rounded-2xl bg-brand-500/10 dark:bg-brand-500/10 light:bg-brand-50 border border-brand-500/20 flex items-center justify-center text-brand-400 mb-3 shadow-inner">
+        <div className="w-12 h-12 rounded-2xl bg-brand-500/10 dark:bg-brand-500/10 light:bg-brand-50 border border-brand-500/20 flex items-center justify-center text-brand-400 mb-3 shadow-inner animate-float">
           <Icon className="w-6 h-6" />
         </div>
       )}
@@ -286,7 +361,7 @@ export function EmptyState({ icon: Icon, title, description, action }) {
   )
 }
 
-// Alert Notification Banner
+// Alert Notification Banner — with slide-in
 export function Alert({ type = 'info', title, message, onDismiss, className = '' }) {
   const types = {
     info: {
@@ -314,7 +389,7 @@ export function Alert({ type = 'info', title, message, onDismiss, className = ''
   const { cls, iconCls, Icon } = types[type] || types.info
 
   return (
-    <div className={`flex items-start gap-3 p-4 rounded-xl border ${cls} ${className}`}>
+    <div className={`flex items-start gap-3 p-4 rounded-xl border banner-slide-in ${cls} ${className}`}>
       <Icon className={`w-5 h-5 flex-shrink-0 mt-0.5 ${iconCls}`} />
       <div className="flex-1 text-xs">
         {title && <p className="font-bold mb-0.5">{title}</p>}
@@ -342,15 +417,16 @@ export function Currency({ amount, currency = '₹' }) {
   )
 }
 
-// Modal Dialog
+// Modal Dialog — with settle
 export function Modal({ isOpen, onClose, title, subtitle, children, maxWidth = 'max-w-lg' }) {
   if (!isOpen) return null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
       <div
-        className={`glass-panel w-full ${maxWidth} p-6 shadow-2xl space-y-4 animate-slide-up border border-slate-700/80 dark:border-slate-700/80 light:border-slate-300 relative`}
+        className={`glass-panel w-full ${maxWidth} p-6 shadow-2xl space-y-4 modal-enter border border-slate-700/80 dark:border-slate-700/80 light:border-slate-300 relative overflow-hidden`}
       >
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent pointer-events-none" />
         <div className="flex items-start justify-between pb-3 border-b border-slate-800 dark:border-slate-800 light:border-slate-200">
           <div>
             <h3 className="text-base font-bold text-slate-100 dark:text-slate-100 light:text-slate-900">{title}</h3>
@@ -414,7 +490,7 @@ export function Tabs({ tabs, activeTab, onChange, className = '' }) {
             onClick={() => onChange(tab.id)}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-200 ${
               isActive
-                ? 'bg-brand-600 text-white shadow-md shadow-brand-600/30'
+                ? 'bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-600/30'
                 : 'text-slate-400 dark:text-slate-400 light:text-slate-600 hover:text-slate-200 dark:hover:text-slate-200 light:hover:text-slate-900 hover:bg-slate-800/40 dark:hover:bg-slate-800/40 light:hover:bg-slate-300/60'
             }`}
           >
