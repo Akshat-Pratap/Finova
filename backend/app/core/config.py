@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = Field(default="")
 
     # CORS
-    cors_origins: str = Field(default="http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173")
+    cors_origins: str = Field(default="http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,https://finova-fin.vercel.app")
 
     # Authentication & JWT
     jwt_secret_key: str = Field(default="finova-production-secret-key-at-least-32-chars-long-2026")
