@@ -10,7 +10,10 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.models.dataset import Dataset, DatasetStatus
+from app.models.dataset import (
+    Dataset, DatasetStatus, DatasetType,
+    infer_dataset_type, get_compatible_types, get_validation_profile
+)
 from app.models.audit_log import AuditEventType
 from app.services.audit_logger import AuditLogger
 from app.services.data_engine.column_mapper import detect_column_mapping, apply_column_mapping
@@ -18,6 +21,7 @@ from app.services.data_engine.ingestion import ingest_csv, ingest_json, Ingestio
 from app.services.data_engine.cleaner import clean_transactions
 from app.services.data_engine.normalizer import normalize_transactions
 from app.services.data_engine.validator import validate_transactions
+from app.services.data_engine.dataset_validator import validate_records_for_type
 from app.services.memory_store import memory_datasets, memory_dataset_records
 from app.utils.helpers import dict_to_mongo
 
@@ -86,14 +90,19 @@ class DatasetService:
         sample_records = ingestion.records[:5]
         columns = list(sample_records[0].keys()) if sample_records else []
         auto_mapping = detect_column_mapping(columns)
+        # Infer dataset type from auto-mapping and raw columns (never filename)
+        inferred_type = infer_dataset_type(auto_mapping, raw_columns=columns, raw_sample=sample_records)
 
         dataset = Dataset(
             dataset_id=f"ds_{uuid.uuid4().hex[:12]}",
             organization_id=organization_id,
             filename=filename,
             source_type="json" if filename_lower.endswith(".json") else "csv",
+            dataset_type=inferred_type,
             record_count=len(ingestion.records),
             column_mapping=auto_mapping,
+            canonical_fields=list(auto_mapping.values()),
+            required_fields=get_validation_profile(inferred_type).get("required", []),
             uploaded_by=user_id,
             uploaded_at=datetime.utcnow(),
             processing_status=DatasetStatus.UPLOADED,
@@ -178,54 +187,76 @@ class DatasetService:
         """
         Apply column mapping, clean & normalize records, run validation checks,
         and update dataset with valid/invalid counts and error reports.
+        Generic: supports BANK, INVOICE, PAYMENT, SETTLEMENT, LEDGER, GENERIC.
         """
         dataset = await self.get_dataset(dataset_id, organization_id)
         if not dataset:
             raise ValueError(f"Dataset '{dataset_id}' not found.")
 
         raw_records = memory_dataset_records.get(dataset_id, [])
+        if not raw_records:
+            # Fallback to MongoDB if not in memory
+            raw_records = await self.get_dataset_records(dataset_id)
         if not raw_records and dataset.raw_sample:
             raw_records = dataset.raw_sample
 
         mapping = custom_mapping or dataset.column_mapping
+        # Persist mapping immediately so inference uses the correct mapping
+        if custom_mapping:
+            dataset.column_mapping = mapping
+
+        # Re-infer type from the (possibly custom) mapping
+        columns_for_inference = list(raw_records[0].keys()) if raw_records else list(mapping.keys())
+        inferred_type = infer_dataset_type(mapping, raw_columns=columns_for_inference, raw_sample=raw_records)
+        # Allow explicit dataset_type override via custom_mapping metadata? For now inferred is authoritative
+        dataset.dataset_type = inferred_type
+        dataset.canonical_fields = list(mapping.values())
+        dataset.required_fields = get_validation_profile(inferred_type).get("required", [])
+
         mapped_records = apply_column_mapping(raw_records, mapping)
 
-        cleaned = clean_transactions(mapped_records)
-        normalized, norm_errors = normalize_transactions(
-            cleaned.records,
-            processing_run_id=f"preview-{dataset_id}",
-            organization_id=organization_id,
-            dataset_id=dataset_id,
+        # Generic type-aware validation (does not require transaction_id for invoices)
+        valid_records, report = validate_records_for_type(
+            mapped_records, dataset_type=inferred_type
         )
 
-        valid_txns, report = validate_transactions(normalized, duplicates_removed=cleaned.duplicates_removed)
+        # Also run legacy duplicate-aware cleaning for transaction-type to enrich diagnostics, but don't double-count
+        # For generic types, the new validator already handled duplicates
 
-        dataset.column_mapping = mapping
         dataset.record_count = len(raw_records)
         dataset.valid_count = report.records_valid
-        dataset.invalid_count = report.records_invalid + cleaned.invalid_removed
+        dataset.invalid_count = report.records_invalid
+        dataset.duplicate_count = report.duplicates_detected
         dataset.validation_errors = report.validation_errors[:50]
-        dataset.processing_status = DatasetStatus.VALIDATED if report.records_valid > 0 else DatasetStatus.FAILED
+        dataset.validation_diagnostics = report.diagnostics[:20]
+        dataset.validated_at = datetime.utcnow()
+        # Status lifecycle: VALIDATED if any valid, else FAILED
+        if report.records_valid > 0:
+            dataset.processing_status = DatasetStatus.VALIDATED
+        else:
+            dataset.processing_status = DatasetStatus.FAILED
+
+        update_doc = {
+            "column_mapping": mapping,
+            "dataset_type": dataset.dataset_type,
+            "canonical_fields": dataset.canonical_fields,
+            "required_fields": dataset.required_fields,
+            "valid_count": dataset.valid_count,
+            "invalid_count": dataset.invalid_count,
+            "duplicate_count": dataset.duplicate_count,
+            "validation_errors": dataset.validation_errors,
+            "validation_diagnostics": dataset.validation_diagnostics,
+            "processing_status": dataset.processing_status.value,
+            "validated_at": dataset.validated_at,
+        }
 
         if self._db is not None:
             await self._db.datasets.update_one(
                 {"dataset_id": dataset_id},
-                {"$set": {
-                    "column_mapping": mapping,
-                    "valid_count": dataset.valid_count,
-                    "invalid_count": dataset.invalid_count,
-                    "validation_errors": dataset.validation_errors,
-                    "processing_status": dataset.processing_status.value,
-                }},
+                {"$set": update_doc},
             )
         else:
-            memory_datasets[dataset_id].update({
-                "column_mapping": mapping,
-                "valid_count": dataset.valid_count,
-                "invalid_count": dataset.invalid_count,
-                "validation_errors": dataset.validation_errors,
-                "processing_status": dataset.processing_status.value,
-            })
+            memory_datasets[dataset_id].update({k: v.value if hasattr(v, 'value') else v for k, v in update_doc.items()})
 
         await self._audit.log(
             event_type=AuditEventType.DATASET_VALIDATED,
@@ -234,22 +265,92 @@ class DatasetService:
             entity_id=dataset.dataset_id,
             actor=user_id or "user",
             actor_id=user_id,
-            message=f"Dataset '{dataset.filename}' validated: {report.records_valid} valid, {dataset.invalid_count} invalid.",
+            message=f"Dataset '{dataset.filename}' [{inferred_type}] validated: {report.records_valid} valid, {report.records_invalid} invalid.",
             metadata=report.to_dict(),
         )
 
         return {
             "dataset_id": dataset.dataset_id,
             "filename": dataset.filename,
+            "dataset_type": dataset.dataset_type,
             "status": dataset.processing_status.value,
             "record_count": dataset.record_count,
             "valid_count": dataset.valid_count,
             "invalid_count": dataset.invalid_count,
-            "duplicates_detected": report.duplicates_detected,
+            "duplicate_count": dataset.duplicate_count,
             "validation_errors": report.validation_errors,
+            "validation_diagnostics": report.diagnostics,
             "mapping_applied": mapping,
             "ready_for_processing": report.records_valid > 0,
+            "canonical_fields": dataset.canonical_fields,
         }
+
+    async def find_compatible_counterparts(
+        self,
+        source_dataset_id: str,
+        organization_id: str,
+        limit: int = 10,
+    ) -> List[Dataset]:
+        """Find validated compatible counterpart datasets for a source dataset."""
+        source = await self.get_dataset(source_dataset_id, organization_id)
+        if not source:
+            raise ValueError(f"Source dataset '{source_dataset_id}' not found.")
+
+        compatible_types = get_compatible_types(source.dataset_type)
+        # Also include UNKNOWN as compatible fallback
+        compatible_list = list(compatible_types)
+
+        # Query for compatible datasets — include UPLOADED so we can auto-validate on demand
+        # Validated datasets are preferred, but UPLOADED with data can be auto-validated when used as counterpart
+        query = {
+            "organization_id": organization_id,
+            "dataset_id": {"$ne": source_dataset_id},
+            "dataset_type": {"$in": compatible_list},
+        }
+
+        if self._db is not None:
+            cursor = self._db.datasets.find(query).sort("validated_at", -1).limit(limit * 3)
+            docs = await cursor.to_list(length=limit * 3)
+            results = []
+            for d in docs:
+                d.pop("_id", None)
+                if d.get("organization_id") != organization_id:
+                    continue
+                # Allow UPLOADED (can be auto-validated) or VALIDATED with data
+                status = d.get("processing_status")
+                if status == DatasetStatus.VALIDATED.value and d.get("valid_count", 0) <= 0:
+                    continue
+                if status not in (DatasetStatus.UPLOADED.value, DatasetStatus.VALIDATED.value, DatasetStatus.READY_FOR_RECONCILIATION.value, DatasetStatus.COMPLETED.value):
+                    continue
+                if d.get("record_count", 0) <= 0 and d.get("valid_count", 0) <= 0:
+                    continue
+                results.append(Dataset(**d))
+                if len(results) >= limit:
+                    break
+            # Prefer VALIDATED first, then UPLOADED
+            results.sort(key=lambda x: (0 if x.processing_status == DatasetStatus.VALIDATED else 1, -(x.validated_at.timestamp() if x.validated_at else x.uploaded_at.timestamp())))
+            return results[:limit]
+        else:
+            # Memory fallback — include UPLOADED so we can auto-validate on demand
+            candidates = []
+            for d in memory_datasets.values():
+                if d.get("organization_id") != organization_id:
+                    continue
+                if d.get("dataset_id") == source_dataset_id:
+                    continue
+                if d.get("dataset_type") not in compatible_list:
+                    continue
+                status = d.get("processing_status")
+                if status not in (DatasetStatus.UPLOADED.value, DatasetStatus.VALIDATED.value, DatasetStatus.READY_FOR_RECONCILIATION.value, DatasetStatus.COMPLETED.value):
+                    continue
+                if d.get("record_count", 0) <= 0 and d.get("valid_count", 0) <= 0:
+                    continue
+                d_copy = d.copy()
+                d_copy.pop("_id", None)
+                candidates.append(Dataset(**d_copy))
+            # Prefer VALIDATED first
+            candidates.sort(key=lambda x: (0 if x.processing_status == DatasetStatus.VALIDATED else 1, -(x.validated_at.timestamp() if x.validated_at else x.uploaded_at.timestamp())))
+            return candidates[:limit]
 
     async def get_dataset_records(self, dataset_id: str) -> List[Dict[str, Any]]:
         """Retrieve stored raw records for a dataset.

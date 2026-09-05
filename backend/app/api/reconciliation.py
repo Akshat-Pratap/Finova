@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.core.database import get_db, is_connected
 from app.core.auth_middleware import AuthenticatedContext, get_auth_context
 from app.services.workflow_controller import WorkflowController
+from app.services.dataset_service import DatasetService
 from app.services.memory_store import memory_runs
 from app.services.background_runner import BackgroundJobRunner
 from app.utils.helpers import dict_to_mongo
@@ -21,7 +22,9 @@ router = APIRouter(prefix="/api/v1/reconciliation", tags=["Reconciliation"])
 class RunRequest(BaseModel):
     """Request to start a reconciliation run."""
     source: str = "synthetic"  # synthetic | dataset | uploaded
-    dataset_id: Optional[str] = None
+    dataset_id: Optional[str] = None  # legacy: source dataset id
+    source_dataset_id: Optional[str] = None  # explicit source
+    counterpart_dataset_id: Optional[str] = None  # explicit counterpart
     num_records: int = 250
     seed: int = 42
     dataset_name: Optional[str] = None
@@ -48,13 +51,28 @@ async def start_reconciliation(
     user_id = ctx.user_id if ctx else "system"
     controller = WorkflowController(db)
 
+    # Resolve effective source/counterpart ids (backwards compat with dataset_id)
+    effective_source_id = request.source_dataset_id or request.dataset_id
+    effective_counterpart_id = request.counterpart_dataset_id
+
+    # Validation: same dataset cannot be both source and counterpart
+    if effective_source_id and effective_counterpart_id and effective_source_id == effective_counterpart_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "SAME_DATASET_COUNTERPART",
+                "message": "Source and counterpart dataset cannot be the same.",
+                "source_dataset_id": effective_source_id,
+            },
+        )
+
     # Async background processing option
     if request.async_mode:
         temp_run_id = f"RUN-{uuid.uuid4().hex[:8].upper()}"
         # Fetch initial count if possible
         total_rec = 0
-        if request.source == "dataset" and request.dataset_id and db is not None:
-            ds_doc = await db.datasets.find_one({"dataset_id": request.dataset_id})
+        if request.source == "dataset" and effective_source_id and db is not None:
+            ds_doc = await db.datasets.find_one({"dataset_id": effective_source_id})
             if ds_doc:
                 total_rec = ds_doc.get("record_count", 0)
 
@@ -66,14 +84,51 @@ async def start_reconciliation(
         job.records_total = total_rec
 
         async def _async_worker():
-            if request.source == "dataset" and request.dataset_id:
-                run, results, analytics = await controller.run_from_dataset(
-                    dataset_id=request.dataset_id,
-                    organization_id=org_id,
-                    idempotency_key=request.idempotency_key,
-                    triggered_by=user_id,
-                    job=job,
-                )
+            if request.source == "dataset" and effective_source_id:
+                # Handle explicit counterpart or auto-discovery
+                if effective_counterpart_id:
+                    run, results, analytics = await controller.run_from_datasets(
+                        source_dataset_id=effective_source_id,
+                        counterpart_dataset_id=effective_counterpart_id,
+                        organization_id=org_id,
+                        idempotency_key=request.idempotency_key,
+                        triggered_by=user_id,
+                        job=job,
+                    )
+                elif effective_source_id:
+                    # Try auto-discovery
+                    ds_svc = DatasetService(db)
+                    try:
+                        counterparts = await ds_svc.find_compatible_counterparts(effective_source_id, org_id, limit=5)
+                    except Exception:
+                        counterparts = []
+                    if counterparts:
+                        # Use most recent compatible counterpart deterministically
+                        auto_counterpart = counterparts[0].dataset_id
+                        run, results, analytics = await controller.run_from_datasets(
+                            source_dataset_id=effective_source_id,
+                            counterpart_dataset_id=auto_counterpart,
+                            organization_id=org_id,
+                            idempotency_key=request.idempotency_key,
+                            triggered_by=user_id,
+                            job=job,
+                        )
+                    else:
+                        run, results, analytics = await controller.run_from_dataset(
+                            dataset_id=effective_source_id,
+                            organization_id=org_id,
+                            idempotency_key=request.idempotency_key,
+                            triggered_by=user_id,
+                            job=job,
+                        )
+                else:
+                    run, results, analytics = await controller.run_from_dataset(
+                        dataset_id=effective_source_id,
+                        organization_id=org_id,
+                        idempotency_key=request.idempotency_key,
+                        triggered_by=user_id,
+                        job=job,
+                    )
             else:
                 run, results, analytics = await controller.run_synthetic(
                     num_records=min(request.num_records, 5000),
@@ -83,7 +138,9 @@ async def start_reconciliation(
             return {
                 "run_id": run.run_id,
                 "status": run.status.value,
-                "dataset_id": request.dataset_id,
+                "dataset_id": effective_source_id,
+                "source_dataset_id": effective_source_id,
+                "counterpart_dataset_id": effective_counterpart_id,
                 "total_records": run.records_valid,
                 "records_processed": run.records_valid,
                 "records_matched": run.records_matched,
@@ -97,7 +154,9 @@ async def start_reconciliation(
             "async": True,
             "job_id": job.job_id,
             "run_id": temp_run_id,
-            "dataset_id": request.dataset_id,
+            "dataset_id": effective_source_id,
+            "source_dataset_id": effective_source_id,
+            "counterpart_dataset_id": effective_counterpart_id,
             "status": "QUEUED",
             "total_records": total_rec,
             "message": "Reconciliation job started in background.",
@@ -105,13 +164,60 @@ async def start_reconciliation(
 
     # Synchronous processing
     try:
-        if request.source == "dataset" and request.dataset_id:
-            run, results, analytics = await controller.run_from_dataset(
-                dataset_id=request.dataset_id,
-                organization_id=org_id,
-                idempotency_key=request.idempotency_key,
-                triggered_by=user_id,
-            )
+        if request.source == "dataset" and effective_source_id:
+            # Prefer explicit counterpart path
+            if effective_counterpart_id:
+                run, results, analytics = await controller.run_from_datasets(
+                    source_dataset_id=effective_source_id,
+                    counterpart_dataset_id=effective_counterpart_id,
+                    organization_id=org_id,
+                    idempotency_key=request.idempotency_key,
+                    triggered_by=user_id,
+                )
+            else:
+                # Try auto-discovery for better UX when counterpart not specified
+                ds_svc = DatasetService(db)
+                counterparts = []
+                try:
+                    counterparts = await ds_svc.find_compatible_counterparts(effective_source_id, org_id, limit=5)
+                except Exception:
+                    pass
+                if counterparts:
+                    auto_counterpart = counterparts[0].dataset_id
+                    logger.info("Auto-discovered counterpart %s for source %s", auto_counterpart, effective_source_id)
+                    run, results, analytics = await controller.run_from_datasets(
+                        source_dataset_id=effective_source_id,
+                        counterpart_dataset_id=auto_counterpart,
+                        organization_id=org_id,
+                        idempotency_key=request.idempotency_key,
+                        triggered_by=user_id,
+                    )
+                else:
+                    # Fallback to single-dataset path which will return structured NO_COUNTERPART error
+                    run, results, analytics = await controller.run_from_dataset(
+                        dataset_id=effective_source_id,
+                        organization_id=org_id,
+                        idempotency_key=request.idempotency_key,
+                        triggered_by=user_id,
+                    )
+                    # If NO_COUNTERPART, return structured error response instead of generic 500
+                    if run.status.value == "NO_COUNTERPART_SOURCE":
+                        # Include candidate info if available
+                        from app.models.dataset import infer_dataset_type
+
+                        source_ds = await ds_svc.get_dataset(effective_source_id, org_id)
+                        source_type = source_ds.dataset_type if source_ds else "UNKNOWN"
+                        return {
+                            "success": False,
+                            "error_code": "NO_COMPATIBLE_COUNTERPART",
+                            "message": run.error_message,
+                            "source_dataset_id": effective_source_id,
+                            "source_type": source_type,
+                            "required_action": "UPLOAD_OR_SELECT_COUNTERPART",
+                            "counterpart_candidates": [],
+                            "status": run.status.value,
+                            "run_id": run.run_id,
+                        }
         else:
             run, results, analytics = await controller.run_synthetic(
                 num_records=min(request.num_records, 5000),
@@ -123,6 +229,8 @@ async def start_reconciliation(
             "success": True,
             "run_id": run.run_id,
             "dataset_id": run.dataset_id,
+            "source_dataset_id": getattr(run, 'source_dataset_id', None) or effective_source_id,
+            "counterpart_dataset_id": getattr(run, 'counterpart_dataset_id', None) or effective_counterpart_id,
             "status": run.status.value,
             "total_records": run.records_valid,
             "records_processed": run.records_valid,
@@ -143,6 +251,44 @@ async def start_reconciliation(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "RECONCILIATION_FAILED", "message": str(exc)},
         )
+
+
+@router.get(
+    "/counterparts/{dataset_id}",
+    summary="List compatible counterpart datasets",
+)
+async def list_counterparts(
+    dataset_id: str,
+    ctx: Optional[AuthenticatedContext] = Depends(get_auth_context),
+):
+    """List validated compatible counterpart datasets for a source dataset."""
+    try:
+        db = get_db() if is_connected() else None
+    except Exception:
+        db = None
+    org_id = ctx.org_id if ctx else "org_default"
+    svc = DatasetService(db)
+    try:
+        candidates = await svc.find_compatible_counterparts(dataset_id, org_id, limit=20)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "success": True,
+        "source_dataset_id": dataset_id,
+        "counterpart_candidates": [
+            {
+                "dataset_id": c.dataset_id,
+                "filename": c.filename,
+                "dataset_type": c.dataset_type,
+                "status": c.processing_status.value,
+                "record_count": c.record_count,
+                "valid_count": c.valid_count,
+                "uploaded_at": c.uploaded_at.isoformat() if c.uploaded_at else None,
+            }
+            for c in candidates
+        ],
+        "total_candidates": len(candidates),
+    }
 
 
 @router.get(

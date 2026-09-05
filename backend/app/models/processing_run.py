@@ -25,14 +25,18 @@ class ProcessingRun(BaseModel):
 
     run_id: str = Field(default_factory=lambda: "RUN-" + __import__("uuid").uuid4().hex[:12].upper())
     organization_id: Optional[str] = "org_default"
-    dataset_id: Optional[str] = None
+    dataset_id: Optional[str] = None  # legacy: source dataset
+    source_dataset_id: Optional[str] = None
+    counterpart_dataset_id: Optional[str] = None
+    source_type: Optional[str] = None
+    counterpart_type: Optional[str] = None
     idempotency_key: Optional[str] = None
     triggered_by: Optional[str] = None
     status: RunStatus = RunStatus.STARTED
 
     # Input
     dataset_name: Optional[str] = None
-    dataset_source: str = "synthetic"  # csv / json / synthetic / api
+    dataset_source: str = "synthetic"  # csv / json / synthetic / api / dataset_pair
 
     # Live Progress & Counts
     records_total: int = 0

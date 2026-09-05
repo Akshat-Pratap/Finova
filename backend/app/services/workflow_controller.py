@@ -642,6 +642,313 @@ class WorkflowController:
 
         return run, results, analytics
 
+    async def run_from_datasets(
+        self,
+        source_dataset_id: str,
+        counterpart_dataset_id: str,
+        organization_id: str = "org_default",
+        idempotency_key: Optional[str] = None,
+        triggered_by: Optional[str] = None,
+        job: Optional[Any] = None,
+    ) -> Tuple[ProcessingRun, List[ReconciliationResult], Dict[str, Any]]:
+        """Cross-source reconciliation between two uploaded datasets.
+
+        Generic: supports INVOICE ↔ BANK ↔ PAYMENT ↔ SETTLEMENT ↔ LEDGER ↔ GENERIC
+        without requiring identical source-specific IDs.
+        """
+        from app.services.dataset_service import DatasetService
+        from app.services.data_engine.column_mapper import apply_column_mapping
+        from app.services.data_engine.canonical import normalize_to_canonical
+        from app.services.finance_engine.canonical_reconciliation import reconcile_canonical_batch
+        from app.models.dataset import get_compatible_types
+
+        # 1. Tenant isolation & validation
+        if source_dataset_id == counterpart_dataset_id:
+            raise ValueError("Source and counterpart dataset cannot be the same.")
+
+        dataset_svc = DatasetService(self._db)
+        source_ds = await dataset_svc.get_dataset(source_dataset_id, organization_id)
+        counterpart_ds = await dataset_svc.get_dataset(counterpart_dataset_id, organization_id)
+
+        if not source_ds:
+            raise ValueError(f"Source dataset '{source_dataset_id}' not found in organization '{organization_id}'.")
+        if not counterpart_ds:
+            raise ValueError(f"Counterpart dataset '{counterpart_dataset_id}' not found in organization '{organization_id}'.")
+
+        # Auto-validate if UPLOADED (user clicked Reconcile without explicit Validate step)
+        for ds in (source_ds, counterpart_ds):
+            if ds.processing_status == DatasetStatus.UPLOADED:
+                logger.info("Auto-validating UPLOADED dataset %s [%s] before reconciliation", ds.dataset_id, ds.dataset_type)
+                try:
+                    await dataset_svc.validate_dataset(ds.dataset_id, organization_id)
+                    # Refresh
+                    refreshed = await dataset_svc.get_dataset(ds.dataset_id, organization_id)
+                    if refreshed:
+                        if ds.dataset_id == source_dataset_id:
+                            source_ds = refreshed
+                        else:
+                            counterpart_ds = refreshed
+                except Exception as exc:
+                    logger.warning("Auto-validation failed for %s: %s", ds.dataset_id, exc)
+
+        # Validate status - allow UPLOADED that was just validated, but reject FAILED
+        if source_ds.processing_status not in (DatasetStatus.VALIDATED, DatasetStatus.READY_FOR_RECONCILIATION, DatasetStatus.COMPLETED, DatasetStatus.UPLOADED):
+            raise ValueError(f"Source dataset '{source_dataset_id}' is not ready (status={source_ds.processing_status}).")
+        if counterpart_ds.processing_status not in (DatasetStatus.VALIDATED, DatasetStatus.READY_FOR_RECONCILIATION, DatasetStatus.COMPLETED, DatasetStatus.UPLOADED):
+            raise ValueError(f"Counterpart dataset '{counterpart_dataset_id}' is not ready (status={counterpart_ds.processing_status}).")
+        # If still UPLOADED after auto-validate attempt and valid_count==0, treat as not ready
+        if source_ds.valid_count == 0 and source_ds.processing_status == DatasetStatus.UPLOADED:
+            # Try one more validate
+            try:
+                await dataset_svc.validate_dataset(source_dataset_id, organization_id)
+                source_ds = await dataset_svc.get_dataset(source_dataset_id, organization_id)
+            except Exception:
+                pass
+        if counterpart_ds.valid_count == 0 and counterpart_ds.processing_status == DatasetStatus.UPLOADED:
+            try:
+                await dataset_svc.validate_dataset(counterpart_dataset_id, organization_id)
+                counterpart_ds = await dataset_svc.get_dataset(counterpart_dataset_id, organization_id)
+            except Exception:
+                pass
+
+        # Compatibility check
+        compatible = get_compatible_types(source_ds.dataset_type)
+        if counterpart_ds.dataset_type not in compatible:
+            logger.warning("Dataset types %s and %s may have limited compatibility, proceeding anyway", source_ds.dataset_type, counterpart_ds.dataset_type)
+
+        # 2. Idempotency / active run check (key includes both ids)
+        combined_key = f"{source_dataset_id}:{counterpart_dataset_id}:{idempotency_key}" if idempotency_key else None
+        if combined_key:
+            existing = await self._check_idempotency(combined_key, organization_id)
+            if existing:
+                logger.info("Idempotent run_from_datasets returning existing %s", existing.run_id)
+                results = await self.get_results_for_run(existing.run_id, organization_id)
+                analytics = compute_run_analytics(results, existing)
+                return existing, results, analytics
+
+        # 3. Load records
+        source_raw = await dataset_svc.get_dataset_records(source_dataset_id)
+        counterpart_raw = await dataset_svc.get_dataset_records(counterpart_dataset_id)
+        # Fallback to raw_sample if records not yet persisted
+        if not source_raw and source_ds.raw_sample:
+            source_raw = source_ds.raw_sample
+        if not counterpart_raw and counterpart_ds.raw_sample:
+            counterpart_raw = counterpart_ds.raw_sample
+
+        if not source_raw:
+            raise ValueError(f"Source dataset '{source_dataset_id}' has no records.")
+        if not counterpart_raw:
+            raise ValueError(f"Counterpart dataset '{counterpart_dataset_id}' has no records.")
+
+        # 4. Apply column mappings
+        source_mapped = apply_column_mapping(source_raw, source_ds.column_mapping)
+        counterpart_mapped = apply_column_mapping(counterpart_raw, counterpart_ds.column_mapping)
+
+        # 5. Normalize to canonical
+        source_canonical = normalize_to_canonical(source_mapped, source_ds.dataset_type, organization_id, source_dataset_id)
+        counterpart_canonical = normalize_to_canonical(counterpart_mapped, counterpart_ds.dataset_type, organization_id, counterpart_dataset_id)
+
+        if not source_canonical:
+            raise ValueError(f"Source dataset '{source_dataset_id}' has no canonical records after normalization.")
+        if not counterpart_canonical:
+            raise ValueError(f"Counterpart dataset '{counterpart_dataset_id}' has no canonical records.")
+
+        # 6. Create run
+        run = ProcessingRun(
+            run_id=f"RUN-{uuid.uuid4().hex[:12].upper()}",
+            organization_id=organization_id,
+            dataset_id=source_dataset_id,
+            source_dataset_id=source_dataset_id,
+            counterpart_dataset_id=counterpart_dataset_id,
+            source_type=source_ds.dataset_type,
+            counterpart_type=counterpart_ds.dataset_type,
+            dataset_name=f"{source_ds.filename} ↔ {counterpart_ds.filename}",
+            dataset_source="dataset_pair",
+            idempotency_key=combined_key,
+            triggered_by=triggered_by,
+            records_total=len(source_canonical),
+            status=RunStatus.STARTED,
+        )
+        start_time = time.perf_counter()
+        if job:
+            job.records_total = len(source_canonical)
+            job.progress_percent = 5.0
+
+        await self._persist_run(run)
+        await self._audit.log(
+            AuditEventType.PROCESSING_STARTED,
+            organization_id=organization_id,
+            processing_run_id=run.run_id,
+            actor=triggered_by or "system",
+            message=f"Cross-source reconciliation started: {source_ds.dataset_type} ({len(source_canonical)}) ↔ {counterpart_ds.dataset_type} ({len(counterpart_canonical)})",
+            metadata={"source_dataset_id": source_dataset_id, "counterpart_dataset_id": counterpart_dataset_id},
+        )
+
+        try:
+            # 7. Update datasets to PROCESSING
+            for ds_id in (source_dataset_id, counterpart_dataset_id):
+                if self._db is not None:
+                    try:
+                        await self._db.datasets.update_one({"dataset_id": ds_id}, {"$set": {"processing_status": DatasetStatus.PROCESSING.value}})
+                    except Exception:
+                        pass
+
+            run.status = RunStatus.PROCESSING
+            await self._persist_run(run)
+
+            # 8. Reconcile in bounded batches
+            batch_size = max(100, getattr(settings, "reconciliation_batch_size", 1000))
+            all_results: List[ReconciliationResult] = []
+            processed = 0
+            total = len(source_canonical)
+
+            # For large counterpart, keep it indexed once
+            for i in range(0, total, batch_size):
+                chunk = source_canonical[i:i+batch_size]
+                # For chunk, reconcile against full counterpart but with counterpart-only handling disabled per chunk
+                # We call reconcile without counterpart-only for chunks, then add counterpart-only once at end
+                chunk_results = reconcile_canonical_batch(
+                    source_records=chunk,
+                    counterpart_records=counterpart_canonical,
+                    processing_run_id=run.run_id,
+                    organization_id=organization_id,
+                    source_dataset_id=source_dataset_id,
+                    counterpart_dataset_id=counterpart_dataset_id,
+                    source_type=source_ds.dataset_type,
+                    counterpart_type=counterpart_ds.dataset_type,
+                )
+                # Filter out the counterpart-only MISSING results that are added per chunk (they have dataset_id == counterpart)
+                # Keep only source-side results for batched processing; counterpart-only will be added once after loop
+                source_results = [r for r in chunk_results if r.dataset_id != counterpart_dataset_id]
+                # Also need to handle that reconcile_canonical_batch currently adds counterpart-only; we defer
+                # So we re-run without counterpart-only: we already filtered
+
+                for r in source_results:
+                    r.organization_id = organization_id
+
+                # Create exceptions and persist incrementally
+                await self._create_exceptions(source_results, run.run_id, organization_id)
+                await self._persist_results(source_results)
+                all_results.extend(source_results)
+                processed += len(chunk)
+
+                elapsed_now = time.perf_counter() - start_time
+                run.records_processed = processed
+                run.progress_percent = round((processed / max(1, total)) * 100, 1)
+                run.elapsed_seconds = round(elapsed_now, 2)
+                run.processing_rate = round(processed / max(0.001, elapsed_now), 1)
+                if job:
+                    job.records_total = total
+                    job.records_processed = processed
+                    job.progress_percent = run.progress_percent
+                    job.matched_records = sum(1 for r in all_results if r.status == ReconciliationStatus.MATCHED)
+                    job.unmatched_records = sum(1 for r in all_results if r.status != ReconciliationStatus.MATCHED)
+                    job.exception_count = job.unmatched_records
+                    job.processing_rate = run.processing_rate
+                    job.elapsed_seconds = run.elapsed_seconds
+                if i % (batch_size * 2) == 0:
+                    await self._persist_run(run)
+
+            # Now handle counterpart-only records that never matched any source
+            # Build set of matched counterpart ids from all_results
+            matched_c_ids = set()
+            for r in all_results:
+                if r.bank_transaction_id:
+                    matched_c_ids.add(r.bank_transaction_id)
+                if r.invoice_id:
+                    matched_c_ids.add(r.invoice_id)
+                # Generic
+                if r.transaction_id and r.transaction_id not in [s.get("record_id") for s in source_canonical]:
+                    # This is a bit heuristic; rely on reconcile_canonical_batch's matched set
+                    pass
+
+            # Use the full reconcile to get counterpart-only, but dedupe
+            full_results = reconcile_canonical_batch(
+                source_records=source_canonical,
+                counterpart_records=counterpart_canonical,
+                processing_run_id=run.run_id,
+                organization_id=organization_id,
+                source_dataset_id=source_dataset_id,
+                counterpart_dataset_id=counterpart_dataset_id,
+            )
+            # Extract counterpart-only (MISSING status with dataset_id == counterpart)
+            counterpart_only = [r for r in full_results if r.status == ReconciliationStatus.MISSING and r.dataset_id == counterpart_dataset_id]
+            # Avoid duplicates already counted
+            existing_ids = {r.transaction_id for r in all_results}
+            new_counterpart = [r for r in counterpart_only if r.transaction_id not in existing_ids]
+            if new_counterpart:
+                for r in new_counterpart:
+                    r.organization_id = organization_id
+                await self._create_exceptions(new_counterpart, run.run_id, organization_id)
+                await self._persist_results(new_counterpart)
+                all_results.extend(new_counterpart)
+
+            results = all_results
+            elapsed = time.perf_counter() - start_time
+            run.processing_time_seconds = round(elapsed, 3)
+            run.elapsed_seconds = run.processing_time_seconds
+            run.records_processed = len(results)
+            run.progress_percent = 100.0
+            run.processing_rate = round(len(results) / max(0.001, elapsed), 1)
+            run.records_received = total
+            run.records_valid = total
+            run.records_matched = sum(1 for r in results if r.status == ReconciliationStatus.MATCHED)
+            run.records_ai_reviewed = sum(1 for r in results if r.status == ReconciliationStatus.AI_REVIEW)
+            run.records_manual_review = sum(1 for r in results if r.status == ReconciliationStatus.MANUAL_REVIEW)
+            run.records_mismatch = sum(1 for r in results if r.status == ReconciliationStatus.MISMATCH)
+            run.records_duplicate = sum(1 for r in results if r.status == ReconciliationStatus.DUPLICATE)
+            run.records_missing = sum(1 for r in results if r.status == ReconciliationStatus.MISSING)
+            run.records_unmatched = len(results) - run.records_matched
+            run.exceptions_created = run.records_manual_review + run.records_ai_reviewed + run.records_mismatch + run.records_missing
+            run.match_rate = round(run.records_matched / len(results), 4) if results else 0.0
+            run.average_confidence = round(sum(r.confidence for r in results) / len(results), 4) if results else 0.0
+            run.status = RunStatus.COMPLETED
+            run.completed_at = datetime.utcnow()
+
+            analytics = compute_run_analytics(results, run)
+            await self._persist_run(run)
+
+            # Update datasets to COMPLETED
+            for ds_id in (source_dataset_id, counterpart_dataset_id):
+                if self._db is not None:
+                    try:
+                        await self._db.datasets.update_one({"dataset_id": ds_id}, {"$set": {"processing_status": DatasetStatus.COMPLETED.value, "processing_run_id": run.run_id}})
+                    except Exception:
+                        pass
+
+            await self._audit.log(
+                AuditEventType.PROCESSING_COMPLETED,
+                organization_id=organization_id,
+                processing_run_id=run.run_id,
+                message=f"Cross-source reconciliation completed: {run.records_matched} matched, {run.exceptions_created} exceptions in {elapsed:.2f}s",
+                metadata={"match_rate": run.match_rate, "source": source_dataset_id, "counterpart": counterpart_dataset_id},
+            )
+            if job:
+                job.status = JobStatus.COMPLETED
+                job.progress_percent = 100.0
+                job.records_processed = len(results)
+                job.matched_records = run.records_matched
+                job.unmatched_records = run.records_unmatched
+                job.result = {"run_id": run.run_id, "status": RunStatus.COMPLETED.value, "records_processed": len(results), "records_matched": run.records_matched, "match_rate": run.match_rate, "analytics": analytics}
+
+        except Exception as exc:
+            err_str = str(exc)
+            is_storage = "over your space quota" in err_str or "AtlasError" in err_str
+            run.status = RunStatus.STORAGE_LIMIT_REACHED if is_storage else RunStatus.FAILED
+            run.error_message = err_str
+            run.completed_at = datetime.utcnow()
+            run.processing_time_seconds = round(time.perf_counter() - start_time, 3)
+            try:
+                await self._persist_run(run)
+            except Exception:
+                pass
+            if job:
+                job.status = JobStatus.STORAGE_LIMIT_REACHED if is_storage else JobStatus.FAILED
+                job.error = run.error_message
+            raise
+
+        return run, results, analytics
+
     # ---------------------------------------------------------------------------
     # Internal helpers
     # ---------------------------------------------------------------------------

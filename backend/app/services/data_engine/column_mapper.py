@@ -10,19 +10,29 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Standard canonical fields for financial transactions
+# Standard canonical fields for financial transactions — extended for generic types
+# Order matters: reference_id before payment_id to avoid "Payment Ref" misclassification
 CANONICAL_FIELDS = {
-    "transaction_id": ["transaction_id", "txn_id", "id", "payment_id", "trans_id", "txnid"],
-    "reference_id": ["reference_id", "reference", "ref_id", "ref", "utr", "bank_ref", "payment_ref", "rrn", "ref_num"],
-    "customer_id": ["customer_id", "cust_id", "customer", "payer", "client_id", "client", "buyer", "customer_name"],
-    "amount": ["amount", "txn_amount", "paid_amount", "gross_amount", "amt", "value", "total", "amount_paid"],
+    "transaction_id": ["transaction_id", "txn_id", "trans_id", "txnid", "record_id"],
+    "bank_transaction_id": ["bank_transaction_id", "bank_txn_id", "statement_id", "bank_transaction", "bank_txn"],
+    "invoice_id": ["invoice_id", "inv_id", "bill_id", "invoice_num", "invoice_number", "bill_number", "invoice_no"],
+    "reference_id": ["reference_id", "reference", "ref_id", "ref", "utr", "bank_ref", "payment_ref", "rrn", "ref_num", "utr_number", "rrn_number", "payment_ref"],
+    "payment_id": ["payment_id", "pay_id", "payment_transaction_id", "razorpay_payment_id"],
+    "settlement_id": ["settlement_id", "settlement_ref", "payout_id", "settle_id", "settlement_no", "payout_ref"],
+    "customer_id": ["customer_id", "cust_id", "customer", "payer", "client_id", "client", "buyer", "customer_name", "payer_name", "client_name", "buyer_name"],
+    "invoice_amount": ["invoice_amount", "inv_amount", "bill_amount", "invoiced_amount"],
+    "total_amount": ["total_amount", "grand_total", "invoice_total_amount"],
+    "gross_amount": ["settlement_gross", "gross_total"],
+    "net_amount": ["settlement_net", "net_payout", "payout_amount"],
+    "amount": ["amount", "txn_amount", "paid_amount", "amt", "value", "total", "amount_paid", "transaction_amount", "gross_amount", "net_amount"],
+    "fees": ["fees", "fee", "charges", "commission", "gateway_fee", "deduction"],
+    "tax": ["tax", "gst", "vat", "tax_amount", "gst_amount"],
     "currency": ["currency", "curr", "currency_code", "ccy"],
-    "timestamp": ["timestamp", "date", "created_at", "txn_date", "payment_date", "time", "date_time", "trans_date"],
-    "invoice_id": ["invoice_id", "inv_id", "bill_id", "invoice_num", "invoice_number", "bill_number"],
-    "description": ["description", "desc", "narration", "remarks", "memo", "notes", "details"],
-    "order_id": ["order_id", "order_number", "order_ref", "order_no"],
+    "timestamp": ["timestamp", "date", "created_at", "txn_date", "payment_date", "time", "date_time", "trans_date", "invoice_date", "settlement_date", "bank_date", "transaction_date", "posting_date", "value_date"],
+    "description": ["description", "desc", "narration", "remarks", "memo", "notes", "details", "particulars", "narrative"],
+    "order_id": ["order_id", "order_number", "order_ref", "order_no", "order_num"],
     "payment_method": ["payment_method", "method", "mode", "channel", "pay_mode"],
-    "payment_status": ["payment_status", "status", "state", "tx_status"],
+    "payment_status": ["payment_status", "status", "state", "tx_status", "invoice_status", "payment_state"],
 }
 
 
