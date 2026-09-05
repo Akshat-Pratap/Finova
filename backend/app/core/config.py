@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     ai_review_threshold: float = Field(default=0.70)
 
     # Upload limits
-    max_upload_size: int = Field(default=52428800)  # 50MB
+    max_upload_size: int = Field(default=1073741824)  # 1GB (1024MB)
 
     # Confidence scoring weights (must sum to 1.0)
     weight_reference: float = Field(default=0.30)

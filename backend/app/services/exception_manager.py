@@ -63,6 +63,51 @@ class ExceptionManager:
         logger.info("Exception created: %s | type=%s | txn=%s", exception.exception_id, exc_type.value, result.transaction_id)
         return exception
 
+    async def create_many_from_results(
+        self,
+        results: List[ReconciliationResult],
+        processing_run_id: str,
+        organization_id: str = "org_default",
+    ) -> List[FinovaException]:
+        """Create exceptions in bulk for non-matched results."""
+        exceptions_to_create: List[FinovaException] = []
+        for result in results:
+            if result.status == ReconciliationStatus.MATCHED:
+                continue
+            exc_type, severity, description = _classify_exception(result)
+            exception = FinovaException(
+                exception_id=f"EX-{uuid.uuid4().hex[:8].upper()}",
+                processing_run_id=processing_run_id,
+                organization_id=organization_id,
+                transaction_id=result.transaction_id,
+                result_id=result.result_id,
+                type=exc_type,
+                severity=severity,
+                description=description,
+                expected_value=result.expected_amount,
+                actual_value=result.actual_amount,
+                difference=result.difference,
+            )
+            exceptions_to_create.append(exception)
+
+        if not exceptions_to_create:
+            return []
+
+        for exc in exceptions_to_create:
+            memory_exceptions[exc.exception_id] = dict_to_mongo(exc)
+
+        if self._db is not None:
+            try:
+                batch_size = 2000
+                docs = [dict_to_mongo(exc) for exc in exceptions_to_create]
+                for i in range(0, len(docs), batch_size):
+                    chunk = docs[i : i + batch_size]
+                    await self._db.exceptions.insert_many(chunk, ordered=False)
+            except Exception as exc:
+                logger.warning("Bulk exception persistence warning: %s", exc)
+
+        return exceptions_to_create
+
     async def update_with_ai_result(
         self,
         exception: FinovaException,

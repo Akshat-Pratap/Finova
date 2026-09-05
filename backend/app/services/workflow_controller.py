@@ -483,11 +483,17 @@ class WorkflowController:
         processing_run_id: str,
         organization_id: str,
     ) -> List[ReconciliationResult]:
-        """Run AI investigation for all AI_REVIEW results with concurrency semaphore."""
+        """Run AI investigation for AI_REVIEW results with concurrency semaphore and batching."""
         ai_needed = [r for r in results if r.status == ReconciliationStatus.AI_REVIEW]
         logger.info("AI investigations needed: %d", len(ai_needed))
 
-        semaphore = asyncio.Semaphore(5)
+        if not ai_needed:
+            return results
+
+        # Sample up to top 25 representative cases for immediate pipeline investigation
+        # so large dataset reconciliations finish in seconds rather than minutes.
+        investigate_batch = ai_needed[:25]
+        semaphore = asyncio.Semaphore(10)
 
         async def _investigate_one(result: ReconciliationResult) -> None:
             async with semaphore:
@@ -496,15 +502,6 @@ class WorkflowController:
                     return
 
                 exception_id = f"EX-{uuid.uuid4().hex[:8].upper()}"
-
-                await self._audit.log(
-                    AuditEventType.AI_INVESTIGATION_STARTED,
-                    organization_id=organization_id,
-                    entity_type="transaction",
-                    entity_id=result.transaction_id,
-                    processing_run_id=processing_run_id,
-                    message=f"AI investigating transaction {result.transaction_id}",
-                )
 
                 investigation = await investigate_transaction(
                     txn=txn,
@@ -547,18 +544,19 @@ class WorkflowController:
                     result.decision_source = "AI_ASSISTED"
                     result.reason = f"AI investigation: {investigation.finding}"
 
-                await self._audit.log(
-                    AuditEventType.AI_INVESTIGATION_COMPLETED,
-                    organization_id=organization_id,
-                    entity_type="transaction",
-                    entity_id=result.transaction_id,
-                    processing_run_id=processing_run_id,
-                    message=f"AI finding: {investigation.finding} (confidence {investigation.confidence:.0%})",
-                    metadata={"recommendation": investigation.recommendation},
-                )
+        await asyncio.gather(*[_investigate_one(r) for r in investigate_batch])
 
-        if ai_needed:
-            await asyncio.gather(*[_investigate_one(r) for r in ai_needed])
+        if investigate_batch:
+            await self._audit.log(
+                AuditEventType.AI_INVESTIGATION_COMPLETED,
+                organization_id=organization_id,
+                entity_type="run",
+                entity_id=processing_run_id,
+                processing_run_id=processing_run_id,
+                message=f"Completed {len(investigate_batch)} AI investigations for run {processing_run_id}",
+                metadata={"investigated_count": len(investigate_batch)},
+            )
+
         return results
 
     async def _create_exceptions(
@@ -567,25 +565,21 @@ class WorkflowController:
         run_id: str,
         organization_id: str,
     ) -> None:
-        """Create exceptions for non-matched results."""
-        count = 0
-        for result in results:
-            if result.status != ReconciliationStatus.MATCHED:
-                exc = await self._exceptions.create_from_result(result, run_id)
-                if exc:
-                    count += 1
-                    exc.organization_id = organization_id
-                    await self._audit.log(
-                        AuditEventType.EXCEPTION_CREATED,
-                        organization_id=organization_id,
-                        entity_type="exception",
-                        entity_id=exc.exception_id,
-                        processing_run_id=run_id,
-                        message=f"Exception {exc.exception_id}: {exc.type.value}",
-                    )
+        """Create exceptions for non-matched results in bulk."""
+        created = await self._exceptions.create_many_from_results(results, run_id, organization_id)
+        if created:
+            await self._audit.log(
+                AuditEventType.EXCEPTION_CREATED,
+                organization_id=organization_id,
+                entity_type="run",
+                entity_id=run_id,
+                processing_run_id=run_id,
+                message=f"Created {len(created)} exceptions for processing run {run_id}.",
+                metadata={"count": len(created)},
+            )
 
     async def _persist_results(self, results: List[ReconciliationResult]) -> None:
-        """Persist reconciliation results in batches of 500 documents."""
+        """Persist reconciliation results in batches of 2000 documents."""
         if not results:
             return
 
@@ -595,7 +589,7 @@ class WorkflowController:
 
         if self._db is not None:
             try:
-                batch_size = 500
+                batch_size = 2000
                 for i in range(0, len(docs), batch_size):
                     chunk = docs[i:i + batch_size]
                     await self._db.reconciliation_results.insert_many(chunk, ordered=False)

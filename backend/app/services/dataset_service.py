@@ -4,6 +4,7 @@ Manages uploaded files, column mapping, validation previews, and dataset lifecyc
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -21,6 +22,37 @@ from app.services.memory_store import memory_datasets, memory_dataset_records
 from app.utils.helpers import dict_to_mongo
 
 logger = logging.getLogger(__name__)
+
+
+async def _persist_records_background(
+    db: Any,
+    dataset_id: str,
+    organization_id: str,
+    records: List[Dict[str, Any]],
+) -> None:
+    """Persist large record sets to MongoDB asynchronously in chunks."""
+    try:
+        chunk_size = 2000
+        for i in range(0, len(records), chunk_size):
+            chunk = records[i : i + chunk_size]
+            await db.dataset_records.insert_many(
+                [
+                    {
+                        "dataset_id": dataset_id,
+                        "organization_id": organization_id,
+                        "record": r,
+                    }
+                    for r in chunk
+                ],
+                ordered=False,
+            )
+        logger.info("Successfully persisted %d records for dataset %s to MongoDB", len(records), dataset_id)
+    except Exception as exc:
+        logger.warning(
+            "Background dataset_records persistence failed for %s: %s (memory fallback active)",
+            dataset_id,
+            exc,
+        )
 
 
 class DatasetService:
@@ -68,25 +100,24 @@ class DatasetService:
             raw_sample=sample_records,
         )
 
-        if self._db is not None:
-            await self._db.datasets.insert_one(dict_to_mongo(dataset))
-            # Persist full record set to MongoDB so they survive restarts / multiple workers
-            if ingestion.records:
-                await self._db.dataset_records.insert_many(
-                    [
-                        {
-                            "dataset_id": dataset.dataset_id,
-                            "organization_id": organization_id,
-                            "record": r,
-                        }
-                        for r in ingestion.records
-                    ]
-                )
-        else:
-            memory_datasets[dataset.dataset_id] = dict_to_mongo(dataset)
-
-        # Also cache in-memory for same-process fast path
+        # Always cache in-memory for immediate fast path
+        memory_datasets[dataset.dataset_id] = dict_to_mongo(dataset)
         memory_dataset_records[dataset.dataset_id] = ingestion.records
+
+        if self._db is not None:
+            try:
+                await self._db.datasets.insert_one(dict_to_mongo(dataset))
+                # Persist full records asynchronously so HTTP upload returns immediately
+                if ingestion.records:
+                    asyncio.create_task(
+                        _persist_records_background(
+                            self._db, dataset.dataset_id, organization_id, ingestion.records
+                        )
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Could not persist dataset metadata to MongoDB (%s). Using memory cache fallback.", exc
+                )
 
         await self._audit.log(
             event_type=AuditEventType.DATASET_UPLOADED,

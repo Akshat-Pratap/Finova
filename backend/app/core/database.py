@@ -24,6 +24,11 @@ async def connect_db() -> None:
         _client = AsyncIOMotorClient(
             settings.mongodb_uri,
             serverSelectionTimeoutMS=5000,
+            socketTimeoutMS=45000,
+            connectTimeoutMS=20000,
+            maxPoolSize=50,
+            retryWrites=True,
+            retryReads=True,
             tlsCAFile=certifi.where(),
         )
         # Verify connection
@@ -81,6 +86,10 @@ async def _ensure_indexes() -> None:
     # Datasets
     await db.datasets.create_index([("dataset_id", ASCENDING)], unique=True)
     await db.datasets.create_index([("organization_id", ASCENDING), ("created_at", DESCENDING)])
+
+    # Dataset Records
+    await db.dataset_records.create_index([("dataset_id", ASCENDING)])
+    await db.dataset_records.create_index([("organization_id", ASCENDING), ("dataset_id", ASCENDING)])
 
     # Transactions
     await db.transactions.create_index([("transaction_id", ASCENDING)], unique=True)

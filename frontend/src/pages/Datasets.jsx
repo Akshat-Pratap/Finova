@@ -158,7 +158,7 @@ export default function Datasets() {
           Upload Transaction CSV or JSON File
         </h3>
         <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-          Supports Bank feeds, Payment Provider exports, Gateway statements, and ERP ledgers up to 50MB.
+          Supports Bank feeds, Payment Provider exports, Gateway statements, and ERP ledgers up to 1GB.
         </p>
 
         <button

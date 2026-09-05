@@ -52,14 +52,15 @@ export const getHealth = () => api.get('/api/v1/health')
 // --- Datasets & Column Mapping ---
 export const uploadDataset = (formData) => api.post('/api/v1/datasets/upload', formData, {
   headers: { 'Content-Type': 'multipart/form-data' },
+  timeout: 600000, // 10 minutes for large file transfers
 })
 export const listDatasets = (params) => api.get('/api/v1/datasets', { params })
 export const getDataset = (id) => api.get(`/api/v1/datasets/${id}`)
-export const validateDataset = (id, mapping) => api.post(`/api/v1/datasets/${id}/validate`, { column_mapping: mapping })
+export const validateDataset = (id, mapping) => api.post(`/api/v1/datasets/${id}/validate`, { column_mapping: mapping }, { timeout: 300000 })
 export const generateDataset = (params) => api.post('/api/v1/datasets/generate', null, { params })
 
 // --- Reconciliation ---
-export const startReconciliation = (data) => api.post('/api/v1/reconciliation/run', data)
+export const startReconciliation = (data) => api.post('/api/v1/reconciliation/run', data, { timeout: 600000 })
 export const getJobStatus = (jobId) => api.get(`/api/v1/reconciliation/job/${jobId}`)
 export const getRunDetails = (runId) => api.get(`/api/v1/reconciliation/${runId}`)
 export const listRuns = (params) => api.get('/api/v1/reconciliation', { params })
